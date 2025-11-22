@@ -1,4 +1,5 @@
 // src/App.js
+
 import React, { useState, useEffect } from "react";
 import {
   BrowserRouter as Router,
@@ -11,11 +12,12 @@ import "./App.css";
 import Landing from "./Landing";
 import SignIn from "./SignIn";
 import UsageBanner from "./UsageBanner";
+import { getGreeting } from "./Greeting";
+import { jwtDecode } from "jwt-decode";
+
 const USAGE_LIMITS = {
   maxFileSizeMB: 5,
 };
-import { getGreeting } from "./Greeting";
-import { jwtDecode } from "jwt-decode";
 
 function DataCleaner() {
   const [file, setFile] = useState(null);
