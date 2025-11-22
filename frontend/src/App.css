@@ -286,6 +286,14 @@
   text-align: left;
 }
 
+/* Add spacing between before and after cleaning preview tables */
+.preview-tables-row {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+  margin-bottom: 32px;
+}
+
 /* Removed horizontal layout for preview tables. Now stacked vertically. */
 
 .preview-section h3 {
@@ -815,7 +823,8 @@
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
   }
   50% {
