@@ -1,0 +1,119 @@
+{
+  "name": "Customer Data Cleanup Pipeline",
+  "description": "A comprehensive pipeline for cleaning customer data. Handles common issues like whitespace, missing values, inconsistent formats, and duplicates.",
+  "steps": [
+    {
+      "rule_type": "trim_whitespace",
+      "column": null,
+      "params": {},
+      "description": "Remove leading/trailing whitespace from all text columns",
+      "enabled": true
+    },
+    {
+      "rule_type": "drop_columns",
+      "column": null,
+      "params": {
+        "columns": ["internal_id", "temp_notes"]
+      },
+      "description": "Remove internal columns not needed for analysis",
+      "enabled": true
+    },
+    {
+      "rule_type": "fill_missing",
+      "column": "email",
+      "params": {
+        "value": "unknown@example.com"
+      },
+      "description": "Fill missing emails with placeholder value",
+      "enabled": true
+    },
+    {
+      "rule_type": "fill_missing",
+      "column": "age",
+      "params": {
+        "strategy": "median"
+      },
+      "description": "Fill missing ages with median value",
+      "enabled": true
+    },
+    {
+      "rule_type": "normalize_numbers",
+      "column": "revenue",
+      "params": {
+        "remove_currency": true,
+        "remove_commas": true,
+        "remove_percent": false
+      },
+      "description": "Clean revenue column by removing $ symbols and commas",
+      "enabled": true
+    },
+    {
+      "rule_type": "normalize_numbers",
+      "column": "discount_rate",
+      "params": {
+        "remove_currency": false,
+        "remove_commas": false,
+        "remove_percent": true
+      },
+      "description": "Convert percentage strings to decimal values",
+      "enabled": true
+    },
+    {
+      "rule_type": "coerce_types",
+      "column": "customer_id",
+      "params": {
+        "dtype": "str",
+        "errors": "coerce"
+      },
+      "description": "Ensure customer_id is always a string",
+      "enabled": true
+    },
+    {
+      "rule_type": "coerce_types",
+      "column": "age",
+      "params": {
+        "dtype": "int",
+        "errors": "coerce"
+      },
+      "description": "Convert age to integer type",
+      "enabled": true
+    },
+    {
+      "rule_type": "parse_dates",
+      "column": "signup_date",
+      "params": {
+        "format": "%Y-%m-%d",
+        "errors": "coerce"
+      },
+      "description": "Parse signup_date column as datetime",
+      "enabled": true
+    },
+    {
+      "rule_type": "parse_dates",
+      "column": "last_purchase",
+      "params": {
+        "format": null,
+        "errors": "coerce"
+      },
+      "description": "Parse last_purchase with automatic format detection",
+      "enabled": true
+    },
+    {
+      "rule_type": "dedupe",
+      "column": null,
+      "params": {
+        "subset": ["customer_id", "email"],
+        "keep": "last"
+      },
+      "description": "Remove duplicate customers, keeping the most recent record",
+      "enabled": true
+    }
+  ],
+  "metadata": {
+    "created_at": "2025-12-04T10:00:00.000000",
+    "updated_at": null,
+    "version": "1.0.0",
+    "author": "Data Engineering Team",
+    "tags": ["customer-data", "etl", "production"]
+  }
+}
