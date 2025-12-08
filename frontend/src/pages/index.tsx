@@ -103,6 +103,10 @@ export default function Home() {
     setScanReport(null);
     setError(null);
     setShowUpload(false);
+    // Clear the URL query parameter to prevent re-loading
+    if (router.query.fileId) {
+      router.replace("/", undefined, { shallow: true });
+    }
   };
 
   // Landing page view
