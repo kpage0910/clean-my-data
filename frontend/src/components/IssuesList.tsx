@@ -13,6 +13,149 @@ interface IssuesListProps {
   issues: DataIssue[];
 }
 
+const getIssueIcon = (issueType: string) => {
+  switch (issueType) {
+    case "missing_values":
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M20 12H4"
+          />
+        </svg>
+      );
+    case "boolean_inconsistency":
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M8 9l4-4 4 4m0 6l-4 4-4-4"
+          />
+        </svg>
+      );
+    case "mixed_types":
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 6h16M4 12h16m-7 6h7"
+          />
+        </svg>
+      );
+    case "invalid_email":
+    case "invalid_date":
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+      );
+    case "whitespace":
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4 6h16M4 12h8m-8 6h16"
+          />
+        </svg>
+      );
+    case "duplicate_rows":
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+          />
+        </svg>
+      );
+    default:
+      return (
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+      );
+  }
+};
+
+const getIssueLabel = (issueType: string) => {
+  switch (issueType) {
+    case "boolean_inconsistency":
+      return "Boolean Inconsistency";
+    case "missing_values":
+      return "Missing Values";
+    case "mixed_types":
+      return "Mixed Types";
+    case "invalid_email":
+      return "Invalid Email";
+    case "invalid_date":
+      return "Invalid Date";
+    case "whitespace":
+      return "Whitespace Issues";
+    case "number_formatting":
+      return "Number Formatting";
+    case "number_words":
+      return "Number Words";
+    case "duplicate_rows":
+      return "Duplicate Rows";
+    default:
+      return issueType.replace(/_/g, " ");
+  }
+};
+
 export default function IssuesList({ issues }: IssuesListProps) {
   const issuesByColumn: Record<string, DataIssue[]> = {};
   issues.forEach((issue) => {
@@ -75,10 +218,19 @@ export default function IssuesList({ issues }: IssuesListProps) {
             {columnIssues.map((issue, idx) => (
               <div key={idx} className="p-4 bg-white">
                 <div className="flex items-start gap-3">
+                  <div
+                    className={`mt-0.5 ${
+                      issue.issue_type === "boolean_inconsistency"
+                        ? "text-amber-500"
+                        : "text-neutral-400"
+                    }`}
+                  >
+                    {getIssueIcon(issue.issue_type)}
+                  </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-sm font-medium text-neutral-900">
-                        {issue.issue_type.replace(/_/g, " ")}
+                        {getIssueLabel(issue.issue_type)}
                       </span>
                       <span
                         className={`px-2 py-0.5 text-xs rounded-full border ${getSeverityStyles(
@@ -88,7 +240,10 @@ export default function IssuesList({ issues }: IssuesListProps) {
                         {issue.severity}
                       </span>
                       <span className="text-xs text-neutral-400">
-                        {issue.count} rows
+                        {issue.count}{" "}
+                        {issue.issue_type === "duplicate_rows"
+                          ? "rows"
+                          : "values"}
                       </span>
                     </div>
 
@@ -97,12 +252,20 @@ export default function IssuesList({ issues }: IssuesListProps) {
                     </p>
 
                     {issue.examples && issue.examples.length > 0 && (
-                      <div className="flex items-center gap-1 text-xs text-neutral-400">
-                        <span>Examples:</span>
-                        {issue.examples.slice(0, 3).map((ex, i) => (
+                      <div className="flex flex-wrap items-center gap-1 text-xs text-neutral-400">
+                        <span>
+                          {issue.issue_type === "boolean_inconsistency"
+                            ? "Formats found:"
+                            : "Examples:"}
+                        </span>
+                        {issue.examples.slice(0, 5).map((ex, i) => (
                           <code
                             key={i}
-                            className="bg-neutral-100 px-1.5 py-0.5 rounded text-neutral-600"
+                            className={`px-1.5 py-0.5 rounded ${
+                              issue.issue_type === "boolean_inconsistency"
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-neutral-100 text-neutral-600"
+                            }`}
                           >
                             {ex === null ? "null" : String(ex)}
                           </code>

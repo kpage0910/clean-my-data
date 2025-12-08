@@ -94,7 +94,23 @@ export default function ReviewPage() {
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <Link
             href="/"
-            className="text-sm font-medium text-neutral-900 hover:text-neutral-600 flex items-center gap-2"
+            className="text-sm font-medium text-neutral-900 hover:text-neutral-600"
+          >
+            Clean My Data
+          </Link>
+          <span className="text-sm text-neutral-500">Safe Review Mode</span>
+        </div>
+      </header>
+
+      <div className="max-w-5xl mx-auto px-6 py-8">
+        {/* Back Button */}
+        {fileId && !applyResult?.success && (
+          <Link
+            href={{
+              pathname: "/",
+              query: { fileId },
+            }}
+            className="inline-flex items-center gap-1.5 text-sm text-neutral-500 hover:text-neutral-900 transition-colors mb-6"
           >
             <svg
               className="w-4 h-4"
@@ -109,13 +125,10 @@ export default function ReviewPage() {
                 d="M10 19l-7-7m0 0l7-7m-7 7h18"
               />
             </svg>
-            Clean My Data
+            Back to issues
           </Link>
-          <span className="text-sm text-neutral-500">Safe Review Mode</span>
-        </div>
-      </header>
+        )}
 
-      <div className="max-w-5xl mx-auto px-6 py-8">
         {/* Safety Notice */}
         <div className="mb-6 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
           <div className="flex items-start gap-3">
@@ -275,6 +288,7 @@ export default function ReviewPage() {
               <IssueApprovalList
                 cellIssues={report.cell_issues}
                 rowIssues={report.row_issues}
+                columnIssues={report.column_issues || []}
                 onApprovalChange={setApprovedActions}
                 warnings={report.warnings}
               />

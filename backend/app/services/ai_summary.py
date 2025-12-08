@@ -533,6 +533,224 @@ Generate a comprehensive but readable summary of the data quality issues."""
 
 
 # ============================================
+# AI-Powered Boolean Inconsistency Detection
+# ============================================
+
+def _build_boolean_detection_prompt(column_data: Dict[str, Any]) -> str:
+    """
+    Build the prompt for AI-powered boolean inconsistency detection.
+    
+    Args:
+        column_data: Dictionary with column name and sample values
+        
+    Returns:
+        User prompt string for boolean detection
+    """
+    return f"""Analyze the following column data and determine if it contains boolean/binary values 
+with inconsistent formatting.
+
+Column: {column_data['column_name']}
+Sample values: {json.dumps(column_data['sample_values'], default=str)}
+Value counts: {json.dumps(column_data['value_counts'], default=str)}
+
+Respond with a JSON object containing:
+{{
+    "is_boolean_column": true/false,
+    "confidence": 0.0-1.0,
+    "inconsistency_detected": true/false,
+    "formats_found": ["format1", "format2"],
+    "interpretation": {{
+        "true_values": ["Yes", "1", ...],
+        "false_values": ["No", "0", ...]
+    }},
+    "recommended_format": "True/False" or "Yes/No" or "1/0",
+    "explanation": "Brief explanation of the inconsistency"
+}}
+
+Only respond with valid JSON, no additional text."""
+
+
+def detect_boolean_inconsistencies_ai(
+    df: pd.DataFrame,
+    model: str = DEFAULT_MODEL
+) -> Dict[str, Any]:
+    """
+    Use OpenAI to intelligently detect boolean inconsistencies in DataFrame columns.
+    
+    This function analyzes columns that may contain boolean-like values and uses AI
+    to identify inconsistent formatting patterns. It is READ-ONLY and does NOT
+    modify any data.
+    
+    The AI can detect:
+    - Mixed boolean formats (True/False, Yes/No, 1/0, Y/N, T/F)
+    - Case inconsistencies (true, TRUE, True)
+    - Semantic boolean patterns that rule-based detection might miss
+    - Context-aware boolean interpretation
+    
+    Args:
+        df: The pandas DataFrame to analyze
+        model: The OpenAI model to use (default: gpt-4.1)
+        
+    Returns:
+        Dictionary containing:
+        {
+            "columns_analyzed": int,
+            "inconsistencies_found": int,
+            "columns": {
+                "column_name": {
+                    "is_boolean_column": bool,
+                    "confidence": float,
+                    "inconsistency_detected": bool,
+                    "formats_found": ["True", "Yes", "1", ...],
+                    "interpretation": {
+                        "true_values": [...],
+                        "false_values": [...]
+                    },
+                    "recommended_format": "True/False",
+                    "explanation": str
+                }
+            },
+            "success": bool,
+            "error": str (optional)
+        }
+        
+    Example:
+        >>> df = pd.DataFrame({"active": ["Yes", "no", "1", "True", "N"]})
+        >>> result = detect_boolean_inconsistencies_ai(df)
+        >>> print(result["columns"]["active"]["inconsistency_detected"])
+        True
+    """
+    if df is None or len(df) == 0:
+        return {
+            "columns_analyzed": 0,
+            "inconsistencies_found": 0,
+            "columns": {},
+            "success": True
+        }
+    
+    # Known boolean-like values for pre-filtering
+    boolean_indicators = {'true', 'false', 'yes', 'no', 'y', 'n', 't', 'f', '1', '0', 
+                          '1.0', '0.0', 'on', 'off', 'enabled', 'disabled', 'active', 'inactive'}
+    
+    candidate_columns = []
+    
+    for col in df.columns:
+        # Skip already boolean columns
+        if df[col].dtype == bool:
+            continue
+            
+        # For numeric columns, check if binary (0/1)
+        if pd.api.types.is_numeric_dtype(df[col]):
+            non_null = df[col].dropna()
+            if len(non_null) > 0:
+                unique_vals = set(non_null.unique())
+                if unique_vals <= {0, 1, 0.0, 1.0}:
+                    # Already consistent binary - skip
+                    continue
+            continue
+        
+        # For object columns, check if likely boolean
+        if df[col].dtype == object:
+            non_null = df[col].dropna()
+            non_null = non_null[non_null != '']
+            
+            if len(non_null) == 0:
+                continue
+            
+            # Check if significant portion looks boolean-like
+            sample = non_null.head(100)
+            bool_like_count = sum(1 for v in sample if str(v).strip().lower() in boolean_indicators)
+            
+            if bool_like_count >= len(sample) * 0.5:  # At least 50% look boolean
+                value_counts = non_null.value_counts().head(20).to_dict()
+                candidate_columns.append({
+                    "column_name": col,
+                    "sample_values": [str(v) for v in non_null.unique()[:20]],
+                    "value_counts": {str(k): int(v) for k, v in value_counts.items()}
+                })
+    
+    if not candidate_columns:
+        return {
+            "columns_analyzed": 0,
+            "inconsistencies_found": 0,
+            "columns": {},
+            "success": True
+        }
+    
+    try:
+        client = _get_openai_client()
+        
+        results = {}
+        inconsistencies_count = 0
+        
+        for col_data in candidate_columns:
+            system_prompt = """You are a data quality analyst specializing in detecting 
+boolean/binary value inconsistencies. Analyze column data and identify formatting issues.
+Always respond with valid JSON only."""
+            
+            user_prompt = _build_boolean_detection_prompt(col_data)
+            
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,  # Low temperature for consistent JSON output
+                max_tokens=500
+            )
+            
+            try:
+                ai_result = json.loads(response.choices[0].message.content.strip())
+                results[col_data["column_name"]] = ai_result
+                
+                if ai_result.get("inconsistency_detected", False):
+                    inconsistencies_count += 1
+                    
+            except json.JSONDecodeError:
+                # If AI response isn't valid JSON, skip this column
+                results[col_data["column_name"]] = {
+                    "is_boolean_column": False,
+                    "confidence": 0.0,
+                    "inconsistency_detected": False,
+                    "error": "Failed to parse AI response"
+                }
+        
+        return {
+            "columns_analyzed": len(candidate_columns),
+            "inconsistencies_found": inconsistencies_count,
+            "columns": results,
+            "success": True,
+            "model_used": model
+        }
+        
+    except ValueError as e:
+        return {
+            "columns_analyzed": len(candidate_columns),
+            "inconsistencies_found": 0,
+            "columns": {},
+            "success": False,
+            "error": str(e)
+        }
+    except OpenAIError as e:
+        return {
+            "columns_analyzed": len(candidate_columns),
+            "inconsistencies_found": 0,
+            "columns": {},
+            "success": False,
+            "error": f"OpenAI API error: {str(e)}"
+        }
+    except Exception as e:
+        return {
+            "columns_analyzed": len(candidate_columns),
+            "inconsistencies_found": 0,
+            "columns": {},
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }
+
+
+# ============================================
 # Main Public Function
 # ============================================
 

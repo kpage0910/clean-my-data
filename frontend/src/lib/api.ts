@@ -362,6 +362,18 @@ export interface RowIssueSuggestion {
 }
 
 /**
+ * A suggested fix for a column-level issue (e.g., boolean standardization)
+ */
+export interface ColumnIssueSuggestion {
+  column: string;
+  issue_type: string;
+  description: string;
+  suggested_action: string;
+  available_formats: string[];
+  default_format?: string;
+}
+
+/**
  * Complete report of detected issues with suggestions
  */
 export interface DetectedIssuesReport {
@@ -373,6 +385,7 @@ export interface DetectedIssuesReport {
   row_issues_count: number;
   cell_issues: CellIssueSuggestion[];
   row_issues: RowIssueSuggestion[];
+  column_issues: ColumnIssueSuggestion[];
   column_inferences: ColumnTypeInference[];
   warnings: string[];
 }
@@ -381,10 +394,11 @@ export interface DetectedIssuesReport {
  * A user-approved action to apply
  */
 export interface UserApprovedAction {
-  row_index: number;
+  row_index?: number | null;
   column?: string;
   action: SuggestedAction;
   custom_placeholder?: string;
+  target_format?: string;
 }
 
 /**

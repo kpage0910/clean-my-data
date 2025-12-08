@@ -346,6 +346,150 @@ class RowIssueSuggestion(BaseModel):
     )
 
 
+class ColumnIssueSuggestion(BaseModel):
+    """
+    Suggested fix for a column-level issue (e.g., standardize all booleans).
+    """
+    column: str = Field(..., description="Column name of the affected column")
+    issue_type: str = Field(..., description="Type of issue detected")
+    description: str = Field(..., description="Human-readable issue description")
+    suggested_action: str = Field(..., description="Suggested action to fix the issue")
+    available_formats: List[str] = Field(
+        default_factory=list,
+        description="Available format options for standardization (e.g., ['True/False', 'Yes/No', '1/0'])"
+    )
+    default_format: Optional[str] = Field(
+        None,
+        description="Default/recommended format to standardize to"
+    )
+
+
+# ============================================
+# Boolean Standardization (Safe Review Mode)
+# ============================================
+
+class BooleanFormatExample(BaseModel):
+    """
+    Before/after example for boolean standardization.
+    Shows how a value would be transformed without modifying actual data.
+    """
+    row_index: int = Field(..., description="Row index of the example")
+    original_value: str = Field(..., description="Original value in the data")
+    standardized_value: str = Field(..., description="What it would become after standardization")
+    
+
+class BooleanFormatDistribution(BaseModel):
+    """
+    Distribution of boolean format variations found in a column.
+    """
+    format_name: str = Field(..., description="Format name (e.g., 'true/false', 'yes/no', '1/0')")
+    values_found: List[str] = Field(..., description="Actual values found in this format")
+    count: int = Field(..., description="Number of occurrences")
+    percentage: float = Field(..., description="Percentage of total boolean values")
+
+
+class BooleanStandardizationSuggestion(BaseModel):
+    """
+    Detailed boolean standardization suggestion for Safe Review Mode.
+    
+    SAFE REVIEW MODE PRINCIPLES:
+    - Does NOT automatically standardize boolean values
+    - Provides detailed analysis of inconsistency patterns
+    - Shows before/after examples without modifying data
+    - Requires explicit user confirmation before any transformation
+    """
+    column: str = Field(..., description="Column containing boolean inconsistencies")
+    issue_type: str = Field(
+        default="boolean_inconsistency",
+        description="Type of issue (always 'boolean_inconsistency' for this schema)"
+    )
+    description: str = Field(..., description="Human-readable description of the inconsistency")
+    
+    # Detected patterns
+    detected_formats: List[BooleanFormatDistribution] = Field(
+        ...,
+        description="All boolean format variations detected in the column"
+    )
+    has_mixed_casing: bool = Field(
+        default=False,
+        description="Whether mixed casing was detected (e.g., 'TRUE', 'True', 'true')"
+    )
+    casing_examples: List[str] = Field(
+        default_factory=list,
+        description="Examples of casing variations found"
+    )
+    
+    # Affected data
+    total_boolean_values: int = Field(..., description="Total number of boolean values in the column")
+    affected_rows: int = Field(..., description="Number of rows that would be changed by standardization")
+    affected_row_indices: List[int] = Field(
+        default_factory=list,
+        description="Indices of rows that would be affected (limited to first 100)"
+    )
+    
+    # Recommended standardization formats
+    recommended_formats: List[str] = Field(
+        default_factory=lambda: ["True/False", "Yes/No", "1/0"],
+        description="Available standardization format options"
+    )
+    default_recommended_format: str = Field(
+        default="True/False",
+        description="Default recommended format based on data analysis"
+    )
+    
+    # Before/after examples (preview only - no actual changes)
+    before_after_examples: List[BooleanFormatExample] = Field(
+        default_factory=list,
+        description="Sample before/after transformations (for preview only)"
+    )
+    
+    # Action state
+    requires_user_confirmation: bool = Field(
+        default=True,
+        description="Always True - boolean transformations require explicit user approval"
+    )
+    user_confirmed: bool = Field(
+        default=False,
+        description="Whether user has confirmed this transformation"
+    )
+    selected_format: Optional[str] = Field(
+        default=None,
+        description="Format selected by user (None until confirmed)"
+    )
+
+
+class MediumRiskSuggestion(BaseModel):
+    """
+    Container for medium-risk suggestions that require user review.
+    
+    Medium-risk operations are those that:
+    - Are meaning-preserving but could cause downstream issues
+    - Require user to choose between multiple valid options
+    - Should not be applied automatically
+    
+    Examples:
+    - Boolean standardization (user chooses format)
+    - Date format standardization (user chooses format)
+    - Case normalization for ambiguous columns
+    """
+    suggestion_type: str = Field(..., description="Type of suggestion (e.g., 'boolean_standardization')")
+    risk_level: str = Field(default="medium", description="Risk level (always 'medium' for this container)")
+    suggestion_data: BooleanStandardizationSuggestion = Field(
+        ...,
+        description="Detailed suggestion data"
+    )
+    
+    # User action tracking
+    action_required: bool = Field(
+        default=True,
+        description="Whether user action is required before applying"
+    )
+    action_taken: Optional[str] = Field(
+        default=None,
+        description="Action taken by user: 'approved', 'rejected', or None"
+    )
+
+
 class DetectedIssuesReport(BaseModel):
     """
     Complete report of detected issues with suggested fixes.
@@ -372,6 +516,17 @@ class DetectedIssuesReport(BaseModel):
         default_factory=list,
         description="Row-level issues with suggested fixes"
     )
+    column_issues: List[ColumnIssueSuggestion] = Field(
+        default_factory=list,
+        description="Column-level issues with suggested fixes"
+    )
+    
+    # Medium-risk suggestions (require user confirmation)
+    # Boolean standardization suggestions are placed here
+    medium_risk_suggestions: List[MediumRiskSuggestion] = Field(
+        default_factory=list,
+        description="Medium-risk suggestions requiring user review (e.g., boolean standardization)"
+    )
     
     # Column type inferences for context
     column_inferences: List[ColumnTypeInference] = Field(
@@ -388,16 +543,21 @@ class DetectedIssuesReport(BaseModel):
 
 class UserApprovedAction(BaseModel):
     """
-    A single user-approved action for a cell or row.
+    A single user-approved action for a cell, row, or column.
     
     The user must explicitly approve each action before it is applied.
     """
-    row_index: int = Field(..., description="Row index to apply action to")
-    column: Optional[str] = Field(None, description="Column (None for row-level actions)")
+    row_index: Optional[int] = Field(None, description="Row index to apply action to (None for column-level actions)")
+    column: Optional[str] = Field(None, description="Column (None for row-level actions, required for column-level)")
     action: SuggestedAction = Field(..., description="The approved action to take")
     custom_placeholder: Optional[str] = Field(
         None,
         description="Custom placeholder value (for REPLACE_WITH_PLACEHOLDER)"
+    )
+    # For column-level boolean standardization
+    target_format: Optional[str] = Field(
+        None,
+        description="Target format for boolean standardization (e.g., 'True/False', 'Yes/No', '1/0')"
     )
 
 

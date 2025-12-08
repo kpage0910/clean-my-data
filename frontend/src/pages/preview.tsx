@@ -65,7 +65,23 @@ export default function PreviewPage() {
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <Link
             href="/"
-            className="text-sm font-medium text-neutral-900 hover:text-neutral-600 flex items-center gap-2"
+            className="text-sm font-medium text-neutral-900 hover:text-neutral-600"
+          >
+            Clean My Data
+          </Link>
+          <span className="text-sm text-neutral-500">Quick Apply Mode</span>
+        </div>
+      </header>
+
+      <div className="max-w-6xl mx-auto px-6 py-8">
+        {/* Back Button */}
+        {fileId && (
+          <Link
+            href={{
+              pathname: "/",
+              query: { fileId },
+            }}
+            className="inline-flex items-center gap-1.5 text-sm text-neutral-500 hover:text-neutral-900 transition-colors mb-6"
           >
             <svg
               className="w-4 h-4"
@@ -80,13 +96,10 @@ export default function PreviewPage() {
                 d="M10 19l-7-7m0 0l7-7m-7 7h18"
               />
             </svg>
-            Clean My Data
+            Back to issues
           </Link>
-          <span className="text-sm text-neutral-500">Quick Apply Mode</span>
-        </div>
-      </header>
+        )}
 
-      <div className="max-w-6xl mx-auto px-6 py-8">
         {/* Error Display */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl text-red-600 text-sm">

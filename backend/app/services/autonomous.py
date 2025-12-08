@@ -276,12 +276,19 @@ def infer_column_type(df: pd.DataFrame, column: str) -> ColumnInference:
     if BOOLEAN_COLUMN_PATTERNS.search(col_name):
         indicators.append(f"Column name '{col_name}' suggests boolean")
     unique_values = set(str(v).lower().strip() for v in sample_values)
-    if unique_values.issubset(BOOLEAN_VALUES) and len(unique_values) <= 3:
+    # Check if all values are boolean-like representations
+    # Allow any subset of BOOLEAN_VALUES (handles inconsistent formats like "Yes", "1", "True" in same column)
+    if unique_values.issubset(BOOLEAN_VALUES) and len(unique_values) >= 1:
+        # Higher confidence if column name suggests boolean, or if formats are inconsistent
+        has_inconsistent_formats = len(unique_values) > 2
+        confidence = 0.95 if BOOLEAN_COLUMN_PATTERNS.search(col_name) else (0.90 if has_inconsistent_formats else 0.85)
         indicators.append(f"Values {unique_values} are boolean-like")
+        if has_inconsistent_formats:
+            indicators.append("Multiple boolean formats detected (inconsistent)")
         return ColumnInference(
             column=column,
             inferred_type=InferredType.BOOLEAN,
-            confidence=0.95,
+            confidence=confidence,
             indicators=indicators,
             is_safe=True
         )

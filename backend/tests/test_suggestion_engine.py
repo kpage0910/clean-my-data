@@ -169,6 +169,64 @@ class TestIssueDetection:
         assert df["salary"].iloc[0] == "sixty thousand"
         assert df["salary"].iloc[2] == "two hundred fifty"
 
+    def test_detect_boolean_inconsistency(self):
+        """Should detect boolean inconsistencies without modifying data."""
+        df = pd.DataFrame({
+            "is_active": ["Yes", "no", "1", "True", "N", "false", "YES"]
+        })
+        
+        col_inferences = [
+            ColumnTypeInference(
+                column="is_active",
+                inferred_type="boolean",
+                confidence=0.95,
+                indicators=["test"],
+                is_safe=True,
+                warning=None
+            )
+        ]
+        
+        issues = detect_cell_issues(df, col_inferences)
+        
+        boolean_issues = [i for i in issues 
+                         if i.issue_type == IssueType.BOOLEAN_INCONSISTENCY.value]
+        # Should detect inconsistencies since multiple formats are used
+        assert len(boolean_issues) >= 1
+        
+        # Check that issues have deterministic fix values
+        for issue in boolean_issues:
+            assert issue.deterministic_fix_value is not None
+            assert issue.deterministic_fix_explanation is not None
+        
+        # Original data should be unchanged
+        assert df["is_active"].iloc[0] == "Yes"
+        assert df["is_active"].iloc[1] == "no"
+        assert df["is_active"].iloc[2] == "1"
+    
+    def test_consistent_booleans_no_issue(self):
+        """Should not flag consistent boolean columns."""
+        df = pd.DataFrame({
+            "is_active": ["True", "False", "True", "False", "True"]
+        })
+        
+        col_inferences = [
+            ColumnTypeInference(
+                column="is_active",
+                inferred_type="boolean",
+                confidence=0.95,
+                indicators=["test"],
+                is_safe=True,
+                warning=None
+            )
+        ]
+        
+        issues = detect_cell_issues(df, col_inferences)
+        
+        boolean_issues = [i for i in issues 
+                         if i.issue_type == IssueType.BOOLEAN_INCONSISTENCY.value]
+        # Should NOT detect issues since format is consistent
+        assert len(boolean_issues) == 0
+
     def test_detect_empty_rows(self):
         """Should detect empty rows without modifying data."""
         df = pd.DataFrame({

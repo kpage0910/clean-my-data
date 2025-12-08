@@ -32,7 +32,7 @@ Workflow:
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from enum import Enum
 
 import numpy as np
@@ -153,10 +153,11 @@ def apply_safe_transformations(
             result = parse_dates(result, col)
             summary["transformations_applied"].append(f"Normalized dates in '{col}' to ISO format")
         
-        # Boolean columns → standardize
+        # Boolean columns → standardize (skipped - requires user approval for format choice)
+        # This is handled via column-level issues where users can choose True/False, Yes/No, or 1/0
         elif col_type == 'boolean':
-            result = coerce_types(result, col, dtype='bool')
-            summary["transformations_applied"].append(f"Standardized booleans in '{col}'")
+            # Don't auto-standardize booleans - user should choose the format via column issues
+            pass
     
     # Step 4: Deduplicate rows (last step)
     rows_before_dedupe = len(result)
@@ -188,6 +189,7 @@ class IssueType(str, Enum):
     DUPLICATE_ROW = "duplicate_row"
     EMPTY_ROW = "empty_row"
     STRUCTURAL_ISSUE = "structural_issue"
+    BOOLEAN_INCONSISTENCY = "boolean_inconsistency"
 
 
 def detect_cell_issues(
@@ -249,11 +251,34 @@ def detect_cell_issues(
                 if issue:
                     issues.append(issue)
             
+            elif col_type == 'boolean':
+                # Boolean issues are detected at column level, not cell level
+                pass
+            
             # Universal checks (for all types)
             else:
                 # Check for whitespace issues
                 if isinstance(val, str) and val != val.strip():
                     issues.append(_create_whitespace_suggestion(idx, col, val, strict_config))
+    
+    # Detect boolean inconsistencies at column level
+    for inf in column_inferences:
+        col = inf.column
+        if col not in df.columns:
+            continue
+        
+        col_type = inf.inferred_type if isinstance(inf.inferred_type, str) else inf.inferred_type.value
+        
+        if col_type == 'boolean':
+            target_format = _detect_column_boolean_format(df, col)
+            if target_format:
+                for idx in range(len(df)):
+                    val = df[col].iloc[idx]
+                    if pd.isna(val) or (isinstance(val, str) and val.strip() == ''):
+                        continue
+                    issue = _detect_boolean_issue(idx, col, val, target_format, strict_config)
+                    if issue:
+                        issues.append(issue)
     
     return issues
 
@@ -354,6 +379,12 @@ def generate_suggestions(
     - Detects all issues WITHOUT making any changes
     - Generates suggested fixes for user review
     
+    SAFE REVIEW MODE for Boolean Standardization:
+    - Boolean inconsistencies are detected and placed in medium_risk_suggestions
+    - No automatic standardization is performed
+    - Before/after examples are provided without modifying data
+    - User must explicitly confirm before any boolean transformation
+    
     The user must then approve which actions to apply.
     """
     if strict_config is None:
@@ -379,6 +410,13 @@ def generate_suggestions(
     cell_issues = detect_cell_issues(df, col_inf_schemas, strict_config)
     row_issues = detect_row_issues(df, strict_config)
     
+    # Detect column-level issues (e.g., boolean standardization)
+    column_issues = detect_column_issues(df, col_inf_schemas, strict_config)
+    
+    # Generate medium-risk suggestions (includes boolean standardization)
+    # These require explicit user confirmation before applying
+    medium_risk_suggestions = generate_medium_risk_suggestions(df, col_inf_schemas, strict_config)
+    
     # Generate warnings
     warnings = []
     if strict_config.enabled:
@@ -394,17 +432,29 @@ def generate_suggestions(
             f"Found {missing_count} missing values. These will remain blank unless you choose a placeholder."
         )
     
+    # Add warning for boolean inconsistencies requiring user confirmation
+    if medium_risk_suggestions:
+        bool_suggestions = [s for s in medium_risk_suggestions if s.suggestion_type == "boolean_standardization"]
+        if bool_suggestions:
+            cols = [s.suggestion_data.column for s in bool_suggestions]
+            warnings.append(
+                f"BOOLEAN STANDARDIZATION REQUIRED: Column(s) {', '.join(cols)} contain inconsistent boolean formats. "
+                "Review the medium_risk_suggestions and confirm your preferred format before applying."
+            )
+    
     return DetectedIssuesReport(
         file_id="",  # Will be set by the caller
         total_rows=len(df),
         total_columns=len(df.columns),
-        total_issues=len(cell_issues) + len(row_issues),
+        total_issues=len(cell_issues) + len(row_issues) + len(medium_risk_suggestions),
         cell_issues_count=len(cell_issues),
         row_issues_count=len(row_issues),
         cell_issues=cell_issues,
         row_issues=row_issues,
         column_inferences=col_inf_schemas,
-        warnings=warnings
+        warnings=warnings,
+        column_issues=column_issues,
+        medium_risk_suggestions=medium_risk_suggestions,
     )
 
 
@@ -750,6 +800,134 @@ def _create_whitespace_suggestion(
     )
 
 
+# Boolean value mappings for normalization
+BOOLEAN_TRUE_VALUES = {'true', '1', 'yes', 'y', 't', 'on', 'enabled', 'active'}
+BOOLEAN_FALSE_VALUES = {'false', '0', 'no', 'n', 'f', 'off', 'disabled', 'inactive'}
+BOOLEAN_ALL_VALUES = BOOLEAN_TRUE_VALUES | BOOLEAN_FALSE_VALUES
+
+
+def _detect_boolean_issue(
+    idx: int,
+    col: str,
+    val: Any,
+    target_format: str,
+    strict_config: StrictModeConfig,
+) -> Optional[CellIssueSuggestion]:
+    """
+    Detect boolean formatting inconsistency.
+    
+    Args:
+        idx: Row index
+        col: Column name
+        val: Cell value
+        target_format: Target format ('True/False', 'Yes/No', or '1/0')
+        strict_config: Strict mode configuration
+    
+    Returns:
+        CellIssueSuggestion if inconsistency detected, None otherwise
+    """
+    if not isinstance(val, str):
+        return None
+    
+    val_lower = val.strip().lower()
+    
+    if val_lower not in BOOLEAN_ALL_VALUES:
+        return None
+    
+    # Determine if it's a true or false value
+    is_true = val_lower in BOOLEAN_TRUE_VALUES
+    
+    # Get the target value based on format
+    if target_format == 'True/False':
+        target_val = 'True' if is_true else 'False'
+    elif target_format == 'Yes/No':
+        target_val = 'Yes' if is_true else 'No'
+    elif target_format == '1/0':
+        target_val = '1' if is_true else '0'
+    else:
+        target_val = 'True' if is_true else 'False'  # Default
+    
+    # Check if already in target format
+    if val.strip() == target_val:
+        return None
+    
+    return CellIssueSuggestion(
+        row_index=idx,
+        column=col,
+        original_value=val,
+        issue_type=IssueType.BOOLEAN_INCONSISTENCY.value,
+        issue_description=f"Boolean value '{val}' can be normalized to '{target_val}'",
+        available_actions=[
+            SuggestedAction.LEAVE_AS_IS,
+            SuggestedAction.APPLY_DETERMINISTIC_FIX,
+        ],
+        recommended_action=SuggestedAction.APPLY_DETERMINISTIC_FIX,
+        action_previews={
+            SuggestedAction.LEAVE_AS_IS.value: val,
+            SuggestedAction.APPLY_DETERMINISTIC_FIX.value: target_val,
+        },
+        deterministic_fix_value=target_val,
+        deterministic_fix_explanation=f"Normalize to '{target_format}' format (meaning-preserving)"
+    )
+
+
+def _detect_column_boolean_format(df: pd.DataFrame, col: str) -> Optional[str]:
+    """
+    Detect the most common boolean format in a column.
+    
+    Returns the target format to normalize to, or None if not a boolean column.
+    """
+    non_null = df[col].dropna()
+    if len(non_null) == 0:
+        return None
+    
+    format_counts = {
+        'True/False': 0,
+        'Yes/No': 0,
+        '1/0': 0,
+        'Y/N': 0,
+        'T/F': 0,
+    }
+    
+    bool_count = 0
+    for val in non_null:
+        if not isinstance(val, str):
+            continue
+        val_lower = val.strip().lower()
+        if val_lower in BOOLEAN_ALL_VALUES:
+            bool_count += 1
+            if val_lower in {'true', 'false'}:
+                format_counts['True/False'] += 1
+            elif val_lower in {'yes', 'no'}:
+                format_counts['Yes/No'] += 1
+            elif val_lower in {'1', '0'}:
+                format_counts['1/0'] += 1
+            elif val_lower in {'y', 'n'}:
+                format_counts['Y/N'] += 1
+            elif val_lower in {'t', 'f'}:
+                format_counts['T/F'] += 1
+    
+    # Need at least 50% boolean values to consider this a boolean column
+    if bool_count < len(non_null) * 0.5:
+        return None
+    
+    # Check if multiple formats are used (inconsistency)
+    used_formats = [fmt for fmt, count in format_counts.items() if count > 0]
+    if len(used_formats) <= 1:
+        return None  # Already consistent
+    
+    # Return the most common format, preferring True/False
+    max_format = max(format_counts.items(), key=lambda x: (x[1], x[0] == 'True/False'))
+    
+    # Normalize Y/N to Yes/No and T/F to True/False
+    if max_format[0] == 'Y/N':
+        return 'Yes/No'
+    elif max_format[0] == 'T/F':
+        return 'True/False'
+    
+    return max_format[0]
+
+
 def _convert_value(val: Any) -> Any:
     """Convert numpy/pandas types to native Python types."""
     if pd.isna(val):
@@ -820,6 +998,55 @@ def apply_approved_actions(
     
     # Step 2: Apply user-approved actions
     for action in approved_actions:
+        # Check if this is a column-level action (row_index is None)
+        if action.row_index is None and action.column is not None:
+            # Column-level action (e.g., boolean standardization)
+            if action.action == SuggestedAction.APPLY_DETERMINISTIC_FIX:
+                col = action.column
+                if col in result.columns:
+                    # Determine target format
+                    target_format = action.target_format or _detect_column_boolean_format(result, col)
+                    if target_format:
+                        count = 0
+                        for idx in range(len(result)):
+                            val = result.at[idx, col]
+                            if pd.isna(val) or (isinstance(val, str) and val.strip() == ''):
+                                continue
+                            if isinstance(val, str):
+                                val_lower = val.strip().lower()
+                                if val_lower in BOOLEAN_ALL_VALUES:
+                                    is_true = val_lower in BOOLEAN_TRUE_VALUES
+                                    if target_format == 'True/False':
+                                        new_val = 'True' if is_true else 'False'
+                                    elif target_format == 'Yes/No':
+                                        new_val = 'Yes' if is_true else 'No'
+                                    elif target_format == '1/0':
+                                        new_val = '1' if is_true else '0'
+                                    else:
+                                        new_val = 'True' if is_true else 'False'
+                                    if val.strip() != new_val:
+                                        result.at[idx, col] = new_val
+                                        count += 1
+                        applied.append({
+                            "column": col,
+                            "action": "standardize_booleans",
+                            "target_format": target_format,
+                            "result": f"Standardized {count} values to '{target_format}'"
+                        })
+                    else:
+                        skipped.append({
+                            "column": col,
+                            "action": "standardize_booleans",
+                            "reason": "Could not determine target format"
+                        })
+            elif action.action == SuggestedAction.LEAVE_AS_IS:
+                applied.append({
+                    "column": action.column,
+                    "action": "leave_as_is",
+                    "result": "No change"
+                })
+            continue
+        
         # Safety check: Validate action is allowed
         if not _is_action_allowed(action, strict_config):
             skipped.append({
@@ -1023,3 +1250,339 @@ def _get_deterministic_fix(
             pass
     
     return None
+
+
+def detect_boolean_inconsistencies_detailed(
+    df: pd.DataFrame,
+    col: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Perform detailed analysis of boolean inconsistencies in a column.
+    
+    SAFE REVIEW MODE: This function only analyzes and reports - it does NOT
+    modify any data. All transformations require explicit user confirmation.
+    
+    Detects patterns:
+    - true/false (case-insensitive)
+    - yes/no (case-insensitive)
+    - y/n (case-insensitive)
+    - t/f (case-insensitive)
+    - 1/0
+    - Mixed casing (TRUE, True, true, etc.)
+    
+    Args:
+        df: The DataFrame to analyze
+        col: Column name to analyze
+        
+    Returns:
+        Detailed analysis dict or None if no inconsistency detected
+    """
+    if col not in df.columns:
+        return None
+    
+    non_null = df[col].dropna()
+    if len(non_null) == 0:
+        return None
+    
+    # Define format groups with their canonical representations
+    format_groups = {
+        'true/false': {'true', 'false'},
+        'yes/no': {'yes', 'no'},
+        'y/n': {'y', 'n'},
+        't/f': {'t', 'f'},
+        '1/0': {'1', '0'},
+    }
+    
+    # Track what we find
+    format_distribution = {
+        'true/false': {'count': 0, 'values_found': set()},
+        'yes/no': {'count': 0, 'values_found': set()},
+        'y/n': {'count': 0, 'values_found': set()},
+        't/f': {'count': 0, 'values_found': set()},
+        '1/0': {'count': 0, 'values_found': set()},
+    }
+    
+    # Track casing variations
+    casing_variations = {}  # normalized -> set of original casings
+    
+    # Track affected rows
+    affected_indices = []
+    bool_count = 0
+    
+    for idx, val in df[col].items():
+        if pd.isna(val) or (isinstance(val, str) and val.strip() == ''):
+            continue
+        
+        if not isinstance(val, str):
+            continue
+        
+        val_stripped = val.strip()
+        val_lower = val_stripped.lower()
+        
+        if val_lower in BOOLEAN_ALL_VALUES:
+            bool_count += 1
+            affected_indices.append(int(idx))
+            
+            # Track casing variations
+            if val_lower not in casing_variations:
+                casing_variations[val_lower] = set()
+            casing_variations[val_lower].add(val_stripped)
+            
+            # Categorize into format group
+            for group_name, group_values in format_groups.items():
+                if val_lower in group_values:
+                    format_distribution[group_name]['count'] += 1
+                    format_distribution[group_name]['values_found'].add(val_stripped)
+                    break
+    
+    # Need at least 50% boolean values to consider this a boolean column
+    if bool_count < len(non_null) * 0.5:
+        return None
+    
+    # Check which format groups are actually used
+    used_formats = [
+        group for group, data in format_distribution.items() 
+        if data['count'] > 0
+    ]
+    
+    # Only report if multiple format groups are used (real inconsistency)
+    # OR if there are significant casing inconsistencies
+    has_casing_issues = any(len(casings) > 1 for casings in casing_variations.values())
+    
+    if len(used_formats) <= 1 and not has_casing_issues:
+        return None  # Already consistent
+    
+    # Build format distribution report
+    distribution_report = []
+    for group_name in ['true/false', 'yes/no', '1/0', 'y/n', 't/f']:
+        data = format_distribution[group_name]
+        if data['count'] > 0:
+            distribution_report.append({
+                'format_name': group_name,
+                'values_found': list(data['values_found']),
+                'count': data['count'],
+                'percentage': round((data['count'] / bool_count) * 100, 2) if bool_count > 0 else 0
+            })
+    
+    # Identify casing examples
+    casing_examples = []
+    for normalized, casings in casing_variations.items():
+        if len(casings) > 1:
+            casing_examples.extend(list(casings)[:3])
+    
+    # Determine recommended format based on most common
+    most_common_format = max(
+        [(group, data['count']) for group, data in format_distribution.items()],
+        key=lambda x: (x[1], x[0] == 'true/false')  # Prefer true/false on tie
+    )[0]
+    
+    # Map to standard format names
+    format_mapping = {
+        'true/false': 'True/False',
+        'yes/no': 'Yes/No',
+        'y/n': 'Yes/No',
+        't/f': 'True/False',
+        '1/0': '1/0',
+    }
+    recommended_format = format_mapping.get(most_common_format, 'True/False')
+    
+    # Generate before/after examples
+    before_after_examples = []
+    sample_indices = affected_indices[:10]  # Limit to 10 examples
+    
+    for idx in sample_indices:
+        val = df[col].iloc[idx]
+        if not isinstance(val, str):
+            continue
+        
+        val_stripped = val.strip()
+        val_lower = val_stripped.lower()
+        
+        # Determine standardized value for each format
+        is_true = val_lower in {'true', '1', 'yes', 'y', 't', 'on', 'enabled', 'active'}
+        
+        if recommended_format == 'True/False':
+            standardized = 'True' if is_true else 'False'
+        elif recommended_format == 'Yes/No':
+            standardized = 'Yes' if is_true else 'No'
+        else:  # 1/0
+            standardized = '1' if is_true else '0'
+        
+        if val_stripped != standardized:
+            before_after_examples.append({
+                'row_index': idx,
+                'original_value': val_stripped,
+                'standardized_value': standardized
+            })
+    
+    return {
+        'detected_formats': distribution_report,
+        'has_mixed_casing': has_casing_issues,
+        'casing_examples': casing_examples[:5],
+        'total_boolean_values': bool_count,
+        'affected_rows': len([e for e in before_after_examples if e['original_value'] != e['standardized_value']]) 
+                         if before_after_examples else len(affected_indices),
+        'affected_row_indices': affected_indices[:100],
+        'default_recommended_format': recommended_format,
+        'before_after_examples': before_after_examples,
+    }
+
+
+def generate_medium_risk_suggestions(
+    df: pd.DataFrame,
+    column_inferences: Union[List, Dict],
+    strict_config: Optional[StrictModeConfig] = None,
+) -> list:
+    """
+    Generate medium-risk suggestions that require user confirmation.
+    
+    SAFE REVIEW MODE:
+    - Detects boolean inconsistency patterns
+    - Does NOT automatically standardize
+    - Provides recommended standardization formats
+    - Shows before/after examples without modifying data
+    - Waits for explicit user confirmation before any transformation
+    
+    All boolean normalization suggestions are included in this function's output.
+    
+    Args:
+        df: The DataFrame to analyze
+        column_inferences: Column type inferences
+        strict_config: Strict mode configuration
+        
+    Returns:
+        List of MediumRiskSuggestion objects
+    """
+    from app.models.schemas import (
+        MediumRiskSuggestion,
+        BooleanStandardizationSuggestion,
+        BooleanFormatDistribution,
+        BooleanFormatExample,
+    )
+    
+    suggestions = []
+    
+    # Normalize column inferences to list format
+    inference_items = []
+    if isinstance(column_inferences, dict):
+        for col_name, inf in column_inferences.items():
+            col_type = inf.inferred_type if isinstance(inf.inferred_type, str) else inf.inferred_type.value
+            inference_items.append((col_name, col_type))
+    else:
+        for inf in column_inferences:
+            col_name = inf.column
+            col_type = inf.inferred_type if isinstance(inf.inferred_type, str) else inf.inferred_type.value
+            inference_items.append((col_name, col_type))
+    
+    # Detect boolean inconsistencies for each boolean column
+    for col, col_type in inference_items:
+        if col_type != 'boolean' or col not in df.columns:
+            continue
+        
+        analysis = detect_boolean_inconsistencies_detailed(df, col)
+        if analysis is None:
+            continue
+        
+        # Build format distribution objects
+        format_distributions = [
+            BooleanFormatDistribution(
+                format_name=fmt['format_name'],
+                values_found=fmt['values_found'],
+                count=fmt['count'],
+                percentage=fmt['percentage']
+            )
+            for fmt in analysis['detected_formats']
+        ]
+        
+        # Build before/after example objects
+        before_after_examples = [
+            BooleanFormatExample(
+                row_index=ex['row_index'],
+                original_value=ex['original_value'],
+                standardized_value=ex['standardized_value']
+            )
+            for ex in analysis['before_after_examples']
+        ]
+        
+        # Build description
+        format_names = [fmt['format_name'] for fmt in analysis['detected_formats']]
+        description = (
+            f"Detected inconsistent boolean formats in column '{col}': "
+            f"{', '.join(format_names)}. "
+        )
+        if analysis['has_mixed_casing']:
+            description += f"Also found mixed casing (e.g., {', '.join(analysis['casing_examples'][:3])}). "
+        description += "User confirmation required before standardization."
+        
+        # Create the suggestion
+        bool_suggestion = BooleanStandardizationSuggestion(
+            column=col,
+            issue_type="boolean_inconsistency",
+            description=description,
+            detected_formats=format_distributions,
+            has_mixed_casing=analysis['has_mixed_casing'],
+            casing_examples=analysis['casing_examples'],
+            total_boolean_values=analysis['total_boolean_values'],
+            affected_rows=analysis['affected_rows'],
+            affected_row_indices=analysis['affected_row_indices'],
+            recommended_formats=["True/False", "Yes/No", "1/0"],
+            default_recommended_format=analysis['default_recommended_format'],
+            before_after_examples=before_after_examples,
+            requires_user_confirmation=True,
+            user_confirmed=False,
+            selected_format=None,
+        )
+        
+        suggestions.append(MediumRiskSuggestion(
+            suggestion_type="boolean_standardization",
+            risk_level="medium",
+            suggestion_data=bool_suggestion,
+            action_required=True,
+            action_taken=None,
+        ))
+    
+    return suggestions
+
+
+def detect_column_issues(
+    df: pd.DataFrame,
+    column_inferences: Union[List, Dict],
+    strict_config: Optional[StrictModeConfig] = None,
+) -> list:
+    """
+    Detect column-level issues (e.g., boolean standardization suggestions).
+    
+    Args:
+        df: The DataFrame to analyze
+        column_inferences: Either a list of ColumnTypeInference objects or a dict mapping column names to inferences
+        strict_config: Optional strict mode configuration
+    """
+    from app.models.schemas import ColumnIssueSuggestion, SuggestedAction
+    issues = []
+    
+    # Normalize to a list of (column_name, inferred_type) tuples
+    inference_items = []
+    if isinstance(column_inferences, dict):
+        for col_name, inf in column_inferences.items():
+            col_type = inf.inferred_type if isinstance(inf.inferred_type, str) else inf.inferred_type.value
+            inference_items.append((col_name, col_type))
+    else:
+        for inf in column_inferences:
+            col_name = inf.column
+            col_type = inf.inferred_type if isinstance(inf.inferred_type, str) else inf.inferred_type.value
+            inference_items.append((col_name, col_type))
+    
+    for col, col_type in inference_items:
+        if col_type == 'boolean' and col in df.columns:
+            target_format = _detect_column_boolean_format(df, col)
+            if target_format:
+                # Only suggest if multiple formats are present
+                issues.append(ColumnIssueSuggestion(
+                    column=col,
+                    issue_type=IssueType.BOOLEAN_INCONSISTENCY.value,
+                    description=f"Column contains boolean values with inconsistent formats.",
+                    suggested_action=f"Standardize all to a consistent format",
+                    available_formats=["True/False", "Yes/No", "1/0"],
+                    default_format=target_format
+                ))
+    return issues

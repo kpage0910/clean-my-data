@@ -9,6 +9,7 @@ Tests cover all data quality issue detection functions:
 - Invalid email detection
 - Invalid date detection
 - Number formatting issues detection
+- Boolean inconsistency detection
 """
 
 import pytest
@@ -24,6 +25,7 @@ from app.services.scanner import (
     detect_invalid_dates,
     detect_number_formatting_issues,
     detect_number_words,
+    detect_boolean_inconsistencies,
     analyze_dataframe,
     scan_dataframe,
 )
@@ -610,6 +612,239 @@ class TestScanDataframe:
         assert 'dtype' in result.column_stats['value']
         assert 'null_count' in result.column_stats['value']
         assert result.column_stats['value']['null_count'] == 1
+
+
+# ============================================
+# Tests for detect_boolean_inconsistencies
+# ============================================
+
+class TestDetectBooleanInconsistencies:
+    """Tests for Boolean inconsistency detection."""
+    
+    def test_mixed_true_false_and_yes_no(self):
+        """Test detection of mixed true/false and yes/no formats."""
+        df = pd.DataFrame({
+            'active': ['true', 'false', 'yes', 'no', 'true', 'yes']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'active' in result
+        assert result['active']['issue'] == 'boolean_inconsistency'
+        assert result['active']['count'] == 6
+        assert 'true' in result['active']['formats_found']
+        assert 'yes' in result['active']['formats_found']
+        assert 'normalization_options' in result['active']
+        assert 'True/False' in result['active']['normalization_options']
+    
+    def test_mixed_boolean_and_numeric(self):
+        """Test detection of mixed true/false and 1/0 formats."""
+        df = pd.DataFrame({
+            'enabled': ['true', 'false', '1', '0', 'True', 'FALSE']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'enabled' in result
+        assert result['enabled']['issue'] == 'boolean_inconsistency'
+        assert '1' in result['enabled']['formats_found'] or '0' in result['enabled']['formats_found']
+    
+    def test_mixed_y_n_and_yes_no(self):
+        """Test detection of mixed y/n and yes/no formats."""
+        df = pd.DataFrame({
+            'subscribed': ['y', 'n', 'yes', 'no', 'Y', 'N']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'subscribed' in result
+        assert result['subscribed']['issue'] == 'boolean_inconsistency'
+    
+    def test_consistent_true_false_no_issue(self):
+        """Test that consistent true/false format is not flagged."""
+        df = pd.DataFrame({
+            'active': ['true', 'false', 'true', 'false', 'TRUE', 'FALSE']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        # Should NOT be flagged because all values are in the same format group
+        assert 'active' not in result
+    
+    def test_consistent_yes_no_no_issue(self):
+        """Test that consistent yes/no format is not flagged."""
+        df = pd.DataFrame({
+            'confirmed': ['yes', 'no', 'Yes', 'No', 'YES', 'NO']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        # Should NOT be flagged because all values are in the same format group
+        assert 'confirmed' not in result
+    
+    def test_consistent_1_0_no_issue(self):
+        """Test that consistent 1/0 format is not flagged."""
+        df = pd.DataFrame({
+            'flag': ['1', '0', '1', '0', '1']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        # Should NOT be flagged because all values are in the same format group
+        assert 'flag' not in result
+    
+    def test_non_boolean_column_ignored(self):
+        """Test that non-boolean columns are not flagged."""
+        df = pd.DataFrame({
+            'name': ['Alice', 'Bob', 'Charlie', 'Diana'],
+            'age': [25, 30, 35, 40]
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'name' not in result
+        assert 'age' not in result
+    
+    def test_column_with_null_values(self):
+        """Test that null values are handled correctly."""
+        df = pd.DataFrame({
+            'active': ['true', None, 'yes', np.nan, 'false', '']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'active' in result
+        # Count should only include non-null boolean values
+        assert result['active']['count'] == 3
+    
+    def test_case_insensitivity(self):
+        """Test that detection is case-insensitive."""
+        df = pd.DataFrame({
+            'status': ['TRUE', 'False', 'YES', 'no', 'true', 'NO']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'status' in result
+        # Formats are stored lowercase
+        assert 'true' in result['status']['formats_found']
+        assert 'false' in result['status']['formats_found']
+        assert 'yes' in result['status']['formats_found']
+        assert 'no' in result['status']['formats_found']
+    
+    def test_mixed_t_f_and_true_false(self):
+        """Test detection of mixed t/f and true/false formats."""
+        df = pd.DataFrame({
+            'valid': ['t', 'f', 'true', 'false', 'T', 'F']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'valid' in result
+        assert result['valid']['issue'] == 'boolean_inconsistency'
+    
+    def test_mostly_non_boolean_not_flagged(self):
+        """Test that columns with mostly non-boolean values are not flagged."""
+        df = pd.DataFrame({
+            'mixed': ['apple', 'banana', 'true', 'cherry', 'orange', 'yes', 'grape', 'melon', 'kiwi', 'mango']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        # Only 2 out of 10 values are boolean-like, should not be flagged
+        assert 'mixed' not in result
+    
+    def test_examples_preserve_original_case(self):
+        """Test that examples preserve original case."""
+        df = pd.DataFrame({
+            'active': ['TRUE', 'False', 'YES', 'no']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'active' in result
+        examples = result['active']['examples']
+        # Examples should preserve original case
+        assert 'TRUE' in examples or 'False' in examples or 'YES' in examples
+    
+    def test_numeric_boolean_column_not_flagged(self):
+        """Test that pure numeric boolean columns (0/1) are not flagged."""
+        df = pd.DataFrame({
+            'flag': [0, 1, 0, 1, 1, 0]
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        # Pure numeric 0/1 columns should not be flagged
+        assert 'flag' not in result
+    
+    def test_empty_dataframe(self):
+        """Test handling of empty DataFrame."""
+        df = pd.DataFrame()
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert len(result) == 0
+    
+    def test_normalization_options_present(self):
+        """Test that normalization options are provided."""
+        df = pd.DataFrame({
+            'active': ['true', 'yes', '1', 'false', 'no', '0']
+        })
+        
+        result = detect_boolean_inconsistencies(df)
+        
+        assert 'active' in result
+        options = result['active']['normalization_options']
+        assert 'True/False' in options
+        assert 'Yes/No' in options
+        assert '1/0' in options
+
+
+class TestBooleanInconsistencyIntegration:
+    """Integration tests for Boolean inconsistency detection."""
+    
+    def test_analyze_dataframe_includes_boolean_issues(self):
+        """Test that analyze_dataframe includes Boolean inconsistency issues."""
+        df = pd.DataFrame({
+            'active': ['true', 'yes', 'false', 'no'],
+            'name': ['Alice', 'Bob', 'Charlie', 'Diana']
+        })
+        
+        result = analyze_dataframe(df)
+        
+        assert 'active' in result['column_issues']
+        issues = result['column_issues']['active']
+        boolean_issue = next((i for i in issues if i['issue'] == 'boolean_inconsistency'), None)
+        assert boolean_issue is not None
+    
+    def test_scan_dataframe_boolean_issue_format(self):
+        """Test that scan_dataframe formats Boolean issues correctly."""
+        df = pd.DataFrame({
+            'enabled': ['true', '1', 'yes', 'false', '0', 'no']
+        })
+        
+        result = scan_dataframe(df)
+        
+        boolean_issue = next((i for i in result.issues if i.issue_type == 'boolean_inconsistency'), None)
+        assert boolean_issue is not None
+        assert boolean_issue.severity == 'medium'
+        assert 'Warning' in boolean_issue.description
+        assert 'inconsistent formats' in boolean_issue.description
+        assert 'normalizing' in boolean_issue.description.lower()
+    
+    def test_scan_dataframe_boolean_examples(self):
+        """Test that scan_dataframe includes examples for Boolean issues."""
+        df = pd.DataFrame({
+            'status': ['True', 'YES', '1', 'False', 'No', '0']
+        })
+        
+        result = scan_dataframe(df)
+        
+        boolean_issue = next((i for i in result.issues if i.issue_type == 'boolean_inconsistency'), None)
+        assert boolean_issue is not None
+        assert boolean_issue.examples is not None
+        assert len(boolean_issue.examples) > 0
 
 
 # ============================================

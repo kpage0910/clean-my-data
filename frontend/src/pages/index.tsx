@@ -35,6 +35,29 @@ export default function Home() {
     setGreeting(getGreeting());
   }, []);
 
+  // Handle returning from review/preview pages with fileId
+  useEffect(() => {
+    const queryFileId = router.query.fileId as string | undefined;
+    if (queryFileId && !fileId && !scanReport) {
+      setFileId(queryFileId);
+      setShowUpload(true);
+      setIsLoading(true);
+      setError(null);
+
+      scanFile(queryFileId)
+        .then((response) => {
+          setScanReport(response.report);
+          setFilename("Uploaded file");
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Failed to load file");
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+    }
+  }, [router.query.fileId, fileId, scanReport]);
+
   const handleUploadSuccess = async (
     uploadedFileId: string,
     uploadedFilename: string

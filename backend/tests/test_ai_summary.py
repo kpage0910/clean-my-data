@@ -13,6 +13,7 @@ from unittest.mock import patch, MagicMock
 from app.services.ai_summary import (
     generate_data_quality_summary,
     get_raw_data_quality_analysis,
+    detect_boolean_inconsistencies_ai,
     _compute_missing_value_stats,
     _compute_duplicate_stats,
     _compute_column_type_stats,
@@ -328,3 +329,122 @@ class TestAISummaryGeneration:
         assert result["success"] is True
         assert "analysis" in result
         assert "basic_stats" in result["analysis"]
+
+
+# ============================================
+# Test AI-Powered Boolean Inconsistency Detection
+# ============================================
+
+class TestBooleanInconsistencyDetectionAI:
+    """Tests for AI-powered boolean inconsistency detection."""
+    
+    @pytest.fixture
+    def boolean_inconsistent_df(self):
+        """DataFrame with inconsistent boolean formats."""
+        return pd.DataFrame({
+            "is_active": ["Yes", "no", "1", "True", "N", "false", "YES"],
+            "verified": ["true", "TRUE", "True", "false", "FALSE", "False", "true"],
+            "name": ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace"],
+            "score": [85, 90, 75, 88, 92, 78, 95]
+        })
+    
+    @pytest.fixture
+    def boolean_consistent_df(self):
+        """DataFrame with consistent boolean formats."""
+        return pd.DataFrame({
+            "is_active": [True, False, True, False, True],
+            "name": ["Alice", "Bob", "Charlie", "Diana", "Eve"]
+        })
+    
+    def test_empty_dataframe(self, empty_df):
+        """Test handling of empty DataFrame."""
+        result = detect_boolean_inconsistencies_ai(empty_df)
+        
+        assert result["success"] is True
+        assert result["columns_analyzed"] == 0
+        assert result["inconsistencies_found"] == 0
+    
+    def test_none_dataframe(self):
+        """Test handling of None DataFrame."""
+        result = detect_boolean_inconsistencies_ai(None)
+        
+        assert result["success"] is True
+        assert result["columns_analyzed"] == 0
+    
+    @patch.dict("os.environ", {}, clear=True)
+    def test_missing_api_key(self, boolean_inconsistent_df):
+        """Test error handling when API key is missing."""
+        import os
+        if "OPENAI_API_KEY" in os.environ:
+            del os.environ["OPENAI_API_KEY"]
+        
+        result = detect_boolean_inconsistencies_ai(boolean_inconsistent_df)
+        
+        assert result["success"] is False
+        assert "OPENAI_API_KEY" in result.get("error", "")
+    
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"})
+    @patch("app.services.ai_summary.OpenAI")
+    def test_detects_inconsistent_booleans(self, mock_openai_class, boolean_inconsistent_df):
+        """Test that AI detects boolean inconsistencies."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        
+        # Mock AI response for boolean detection
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = '''{
+            "is_boolean_column": true,
+            "confidence": 0.95,
+            "inconsistency_detected": true,
+            "formats_found": ["Yes", "no", "1", "True", "N"],
+            "interpretation": {
+                "true_values": ["Yes", "1", "True", "YES"],
+                "false_values": ["no", "N", "false"]
+            },
+            "recommended_format": "True/False",
+            "explanation": "Column contains mixed boolean formats including Yes/No, True/False, and 1/0"
+        }'''
+        mock_client.chat.completions.create.return_value = mock_response
+        
+        result = detect_boolean_inconsistencies_ai(boolean_inconsistent_df)
+        
+        assert result["success"] is True
+        assert result["columns_analyzed"] >= 1
+        assert "is_active" in result["columns"]
+        assert result["columns"]["is_active"]["inconsistency_detected"] is True
+    
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"})
+    @patch("app.services.ai_summary.OpenAI")
+    def test_skips_non_boolean_columns(self, mock_openai_class, boolean_inconsistent_df):
+        """Test that non-boolean columns are skipped."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = '''{
+            "is_boolean_column": true,
+            "confidence": 0.9,
+            "inconsistency_detected": true,
+            "formats_found": ["Yes", "no"],
+            "interpretation": {"true_values": ["Yes"], "false_values": ["no"]},
+            "recommended_format": "True/False",
+            "explanation": "Mixed formats"
+        }'''
+        mock_client.chat.completions.create.return_value = mock_response
+        
+        result = detect_boolean_inconsistencies_ai(boolean_inconsistent_df)
+        
+        # 'name' and 'score' columns should not be analyzed as boolean
+        assert "name" not in result["columns"]
+        assert "score" not in result["columns"]
+    
+    def test_skips_native_boolean_columns(self, boolean_consistent_df):
+        """Test that native boolean columns are skipped (already consistent)."""
+        # This should return quickly without calling API since is_active is already bool type
+        result = detect_boolean_inconsistencies_ai(boolean_consistent_df)
+        
+        assert result["success"] is True
+        # Native bool columns should be skipped
+        assert result["columns_analyzed"] == 0

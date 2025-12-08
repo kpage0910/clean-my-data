@@ -34,6 +34,11 @@ EMAIL_PATTERN = re.compile(
 CURRENCY_PATTERN = re.compile(r'^[\$€£¥]?\s*-?\d{1,3}(,\d{3})*(\.\d+)?$')
 NUMBER_WITH_COMMAS_PATTERN = re.compile(r'^-?\d{1,3}(,\d{3})+(\.\d+)?$')
 
+# Boolean value patterns (case-insensitive)
+BOOLEAN_TRUE_VALUES = {'true', '1', 'yes', 'y', 't'}
+BOOLEAN_FALSE_VALUES = {'false', '0', 'no', 'n', 'f'}
+BOOLEAN_ALL_VALUES = BOOLEAN_TRUE_VALUES | BOOLEAN_FALSE_VALUES
+
 
 # ============================================
 # Individual Issue Detection Functions
@@ -444,6 +449,110 @@ def detect_number_words(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def detect_boolean_inconsistencies(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    """
+    Detect columns with inconsistent Boolean value formats.
+    
+    This function identifies columns that appear to represent True/False values
+    but contain mixed formats such as: true, false, 1, 0, yes, no, y, n, t, f
+    (case-insensitive).
+    
+    The function does NOT normalize values; it only reports the inconsistency
+    so users can choose how to normalize (e.g., True/False, Yes/No, or 1/0).
+    
+    Args:
+        df: The pandas DataFrame to analyze
+        
+    Returns:
+        Dictionary mapping column names to Boolean inconsistency info:
+        {
+            "column_name": {
+                "issue": "boolean_inconsistency",
+                "count": int,
+                "formats_found": {"true": 5, "yes": 3, "1": 2, ...},
+                "affected_indices": [row_indices...],
+                "examples": ["true", "Yes", "1", ...],
+                "normalization_options": ["True/False", "Yes/No", "1/0"]
+            }
+        }
+    """
+    result = {}
+    
+    for col in df.columns:
+        # Skip non-object columns that are already boolean
+        if df[col].dtype == bool:
+            continue
+        
+        # For numeric columns, check if they only contain 0 and 1
+        if pd.api.types.is_numeric_dtype(df[col]):
+            non_null = df[col].dropna()
+            if len(non_null) == 0:
+                continue
+            unique_vals = set(non_null.unique())
+            # If it's purely 0s and 1s, it's already consistent - no issue
+            if unique_vals <= {0, 1, 0.0, 1.0}:
+                continue
+            # If it contains other numbers, skip (not a boolean column)
+            continue
+        
+        # For object columns, check for mixed boolean formats
+        if df[col].dtype != object:
+            continue
+        
+        formats_found: Dict[str, int] = {}
+        affected_indices = []
+        examples = []
+        non_boolean_count = 0
+        total_non_null = 0
+        
+        for idx, val in df[col].items():
+            if pd.isna(val) or val == '':
+                continue
+            
+            total_non_null += 1
+            val_str = str(val).strip().lower()
+            
+            if val_str in BOOLEAN_ALL_VALUES:
+                formats_found[val_str] = formats_found.get(val_str, 0) + 1
+                affected_indices.append(int(idx))
+                # Collect unique format examples (original case)
+                original_val = str(val).strip()
+                if original_val not in examples and len(examples) < 10:
+                    examples.append(original_val)
+            else:
+                non_boolean_count += 1
+        
+        # Only report if:
+        # 1. We found boolean-like values
+        # 2. Multiple different formats are used (inconsistency)
+        # 3. Most values appear to be boolean (at least 70% of non-null values)
+        if len(formats_found) > 1:
+            boolean_count = sum(formats_found.values())
+            if total_non_null > 0 and (boolean_count / total_non_null) >= 0.7:
+                # Determine which format groups are present
+                has_true_false = bool(formats_found.keys() & {'true', 'false'})
+                has_yes_no = bool(formats_found.keys() & {'yes', 'no'})
+                has_y_n = bool(formats_found.keys() & {'y', 'n'})
+                has_t_f = bool(formats_found.keys() & {'t', 'f'})
+                has_1_0 = bool(formats_found.keys() & {'1', '0'})
+                
+                # Count distinct format groups
+                format_groups = sum([has_true_false, has_yes_no, has_y_n, has_t_f, has_1_0])
+                
+                # Only report if multiple format groups are used (real inconsistency)
+                if format_groups > 1:
+                    result[col] = {
+                        "issue": "boolean_inconsistency",
+                        "count": boolean_count,
+                        "formats_found": formats_found,
+                        "affected_indices": affected_indices[:100],
+                        "examples": examples,
+                        "normalization_options": ["True/False", "Yes/No", "1/0"]
+                    }
+    
+    return result
+
+
 # ============================================
 # Main Analysis Function
 # ============================================
@@ -500,6 +609,7 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
     invalid_dates = detect_invalid_dates(df)
     number_formatting = detect_number_formatting_issues(df)
     number_words = detect_number_words(df)
+    boolean_inconsistencies = detect_boolean_inconsistencies(df)
     
     # Aggregate column issues
     column_issues: Dict[str, List[Dict[str, Any]]] = {}
@@ -536,6 +646,10 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
     
     # Add number word issues
     for col, issue in number_words.items():
+        add_column_issue(col, issue)
+    
+    # Add boolean inconsistency issues
+    for col, issue in boolean_inconsistencies.items():
         add_column_issue(col, issue)
     
     # Build row issues
@@ -614,6 +728,17 @@ def scan_dataframe(df: pd.DataFrame) -> ScanReport:
             elif issue_type == "number_words":
                 severity = "low"
                 description = f"{count} number words that can be converted to digits"
+            elif issue_type == "boolean_inconsistency":
+                severity = "medium"
+                formats_found = issue.get("formats_found", {})
+                format_list = list(formats_found.keys())
+                examples_list = issue.get("examples", format_list)
+                normalization_options = issue.get("normalization_options", ["True/False", "Yes/No", "1/0"])
+                description = (
+                    f"Warning: Column contains {count} Boolean values with inconsistent formats "
+                    f"(found: {', '.join(format_list)}). "
+                    f"Consider normalizing to one of: {', '.join(normalization_options)}"
+                )
             else:
                 severity = "medium"
                 description = f"{count} issues of type {issue_type}"
