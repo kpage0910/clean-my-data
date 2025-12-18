@@ -1,49 +1,55 @@
 """
-Cleaner service for applying data cleaning rules to CSV files.
+Cleaner Service - Data Transformation Engine
 
-STRICT MODE (Default):
-This cleaner operates as a deterministic data-cleaning engine that:
-1. NEVER invents, fabricates, or guesses new data
-2. Only applies meaning-preserving transformations
-3. Does NOT impute missing values unless explicitly enabled
-4. Leaves invalid/blank cells blank or returns "Unknown" placeholder
-5. Never changes the semantic meaning of a value
-6. Only applies deterministic and reversible modifications
+This module applies cleaning transformations to pandas DataFrames. It is the
+"execution layer" that actually modifies data when the user approves changes.
 
-Allowed Transformations:
-- Capitalization normalization (e.g., DANIEL → Daniel)
-- Number formatting (e.g., "thirty" → 30)
-- Date normalization (format standardization)
-- Trimming whitespace
-- Removing invalid/non-printable characters
-- Lossless type conversions
+KEY DESIGN PRINCIPLE: STRICT MODE (Default)
+───────────────────────────────────────────
+By default, this cleaner operates in "strict mode" which means it will NEVER:
+- Invent, fabricate, or guess data that wasn't there
+- Fill missing values without explicit user permission
+- Change the semantic meaning of any value
 
-Forbidden Transformations (in strict mode):
-- Guessing names, emails, locations, ages, genders
-- Replacing missing entries with fabricated content
-- Inferring values not directly derivable from input
-- Any transformation that changes semantic meaning
+This is intentional. Users trust us with their data, and we should only make
+changes that are obviously correct and reversible.
 
-Supported cleaning rules:
-- drop_columns: Remove specified columns
-- drop_rows: Remove rows (conservative - see below)
-- fill_missing: Fill missing values (BLOCKED in strict mode unless imputation enabled)
-- coerce_types: Convert column to specified data type (lossless only)
-- trim_whitespace: Remove leading/trailing whitespace from string columns
-- parse_dates: Parse column as datetime
-- normalize_numbers: Normalize numeric values (remove currency symbols, commas, etc.)
-- dedupe: Remove duplicate rows
-- normalize_capitalization: Normalize text capitalization (new)
+WHAT STRICT MODE ALLOWS:
+────────────────────────
+✓ Capitalization normalization (e.g., "DANIEL" → "Daniel")
+✓ Number word conversion (e.g., "thirty" → 30)
+✓ Date format standardization (e.g., "12/25/2024" → "2024-12-25")
+✓ Whitespace trimming
+✓ Removing non-printable characters
+✓ Lossless type conversions
 
-Row Dropping Policy (CONSERVATIVE):
+WHAT STRICT MODE BLOCKS (unless explicitly enabled):
+────────────────────────────────────────────────────
+✗ Guessing names, emails, locations, ages, genders
+✗ Filling missing values with mean/median/mode
+✗ Replacing blanks with fabricated content
+✗ Any transformation that could change meaning
+
+ROW DROPPING POLICY (Conservative):
+───────────────────────────────────
 A row is ONLY dropped if:
-1. It is completely empty (all values are null/NaN), OR
-2. It has fewer columns than the header (structural corruption), OR
-3. It violates schema rules in a way that cannot be repaired, OR
-4. A user-defined rule explicitly says to drop it.
-Otherwise, the row is ALWAYS kept.
+1. It is completely empty (all values null/NaN), OR
+2. It has structural corruption (fewer columns than header), OR
+3. User explicitly requested it
 
-All operations are idempotent - applying the same rules twice yields the same result.
+All operations are idempotent—applying the same rule twice yields the same result.
+
+SUPPORTED CLEANING RULES:
+─────────────────────────
+- drop_columns: Remove specified columns
+- fill_missing: Fill missing values (BLOCKED in strict mode unless allowed)
+- coerce_types: Convert column to specified data type
+- trim_whitespace: Remove leading/trailing whitespace
+- parse_dates: Parse column as datetime
+- normalize_numbers: Remove currency symbols, commas, etc.
+- dedupe: Remove duplicate rows
+- normalize_capitalization: Normalize text casing
+- convert_number_words: Convert "thirty" → 30
 """
 
 import re
@@ -58,16 +64,23 @@ from app.models.schemas import CleaningRule, PreviewRow, StrictModeConfig, DEFAU
 # ============================================
 # Strict Mode Validation
 # ============================================
+# Before applying any transformation, we check if it's allowed under the
+# current strict mode configuration. This is the first line of defense
+# against accidentally modifying data in ways the user didn't intend.
 
 def validate_strict_mode_operation(
     operation: str,
     strict_config: StrictModeConfig
 ) -> tuple[bool, str]:
     """
-    Validate if an operation is allowed under the current strict mode config.
+    Check if an operation is allowed under the current strict mode config.
+    
+    Why this matters: Different organizations have different tolerance for
+    automated data changes. A financial firm might want maximum strictness,
+    while a marketing team might be fine with auto-normalization.
     
     Returns:
-        Tuple of (is_allowed, reason_if_blocked)
+        (is_allowed, reason_if_blocked) - tuple for easy conditional logic
     """
     if not strict_config.enabled:
         return True, ""
@@ -97,21 +110,22 @@ def validate_strict_mode_operation(
 # ============================================
 # Individual Cleaning Functions
 # ============================================
+# Each function below handles ONE type of transformation.
+# They are designed to be:
+# - Idempotent: applying twice = applying once
+# - Safe: won't crash on edge cases (empty columns, wrong types)
+# - Explicit: clear about what they change and why
 
 def drop_columns(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """
-    Drop specified columns from the DataFrame.
+    Remove specified columns from the DataFrame.
     
-    Args:
-        df: The pandas DataFrame to clean
-        columns: List of column names to drop
-        
-    Returns:
-        DataFrame with specified columns removed
-        
-    Note:
-        Idempotent: columns that don't exist are silently ignored.
-        This operation is allowed in strict mode as it doesn't fabricate data.
+    This is always safe—removing columns doesn't fabricate data.
+    Columns that don't exist are silently ignored (idempotent behavior).
+    
+    Example:
+        drop_columns(df, ["temp_notes", "internal_id"])
+        # Removes those columns if they exist, does nothing if they don't
     """
     existing_columns = [col for col in columns if col in df.columns]
     return df.drop(columns=existing_columns, errors='ignore')
@@ -127,24 +141,23 @@ def fill_missing(
     """
     Fill missing values in a column.
     
-    STRICT MODE BEHAVIOR:
-    - This function is BLOCKED by default in strict mode
-    - Imputation (mean, median, mode, ffill, bfill) is considered data fabrication
-    - Only allowed when strict_config.allow_imputation is True
-    - Static value filling is only allowed for explicit user-provided values
+    ⚠️  IMPORTANT: This function is BLOCKED by default in strict mode.
     
-    Args:
-        df: The pandas DataFrame to clean
-        column: Column name to fill
-        value: Static value to fill with (used if strategy is None)
-        strategy: Fill strategy - one of 'mean', 'median', 'mode', 'ffill', 'bfill'
-        strict_config: Strict mode configuration (defaults to strict mode)
-        
-    Returns:
-        DataFrame with missing values filled (or unchanged if blocked by strict mode)
-        
-    Note:
-        Idempotent: filling already-filled values has no effect.
+    Why? Filling missing values is a form of data fabrication. If a customer's
+    email is missing, we shouldn't guess it—that would be dishonest. The user
+    must explicitly enable `allow_imputation` to use strategies like mean/median.
+    
+    Strategies:
+        - None (default): Fill with static `value`
+        - 'mean': Fill with column mean (numeric only)
+        - 'median': Fill with column median (numeric only)
+        - 'mode': Fill with most common value
+        - 'ffill': Forward fill (use previous row's value)
+        - 'bfill': Backward fill (use next row's value)
+    
+    Example:
+        # Only works if strict_config.allow_imputation is True
+        fill_missing(df, "age", strategy="median")
     """
     if strict_config is None:
         strict_config = DEFAULT_STRICT_CONFIG

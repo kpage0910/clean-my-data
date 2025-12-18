@@ -1,14 +1,34 @@
 """
-Scanner service for detecting data quality issues in CSV files.
+Scanner Service - Data Quality Issue Detection
 
-This module provides functions to analyze pandas DataFrames and detect
-common data quality issues including:
-- Missing values
-- Duplicate rows
-- Data type inconsistencies
-- Invalid formats (emails, dates, etc.)
-- Whitespace issues
-- Number formatting inconsistencies
+This module analyzes pandas DataFrames to find data quality problems.
+It is READ-ONLY—it never modifies data, only reports what it finds.
+
+ROLE IN THE SYSTEM:
+───────────────────
+Scanner is the "diagnostic" step. Before cleaning anything, we need to know
+what's wrong. This module answers: "What issues exist in this data?"
+
+The scan results are shown to users so they can decide which issues to fix.
+The actual fixing is done by cleaner.py (for rule-based) or suggestion_engine.py
+(for the safe review workflow).
+
+DETECTED ISSUES:
+────────────────
+• Missing values - NaN, None, empty strings
+• Duplicate rows - Exact row-level duplicates  
+• Mixed types - Column contains both strings and numbers
+• Invalid formats - Emails without @, malformed dates, etc.
+• Whitespace issues - Leading/trailing spaces
+• Number formatting - Inconsistent use of commas, currency symbols
+
+OUTPUT FORMAT:
+──────────────
+The main function scan_dataframe() returns a ScanReport containing:
+- total_rows / total_columns: Basic dataset dimensions
+- issues: List of DataIssue objects (one per detected problem)
+- column_stats: Per-column statistics (type, nulls, unique values)
+- summary: Aggregate counts and percentages
 """
 
 import re
@@ -24,17 +44,21 @@ from app.services.cleaner import is_number_phrase, parse_number_phrase
 # ============================================
 # Regex Patterns for Validation
 # ============================================
+# These patterns are used to detect invalid or inconsistent formats.
+# They're intentionally simple to avoid false positives.
 
-# Simple email regex pattern (covers most common cases)
+# Email: Must have @ and a domain with at least 2-char TLD
 EMAIL_PATTERN = re.compile(
     r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
 )
 
-# Pattern to detect numbers with currency symbols or commas
+# Currency: Optional symbol, optional negative, digits with commas, optional decimals
 CURRENCY_PATTERN = re.compile(r'^[\$€£¥]?\s*-?\d{1,3}(,\d{3})*(\.\d+)?$')
+
+# Numbers with thousand separators (helps detect "should this be numeric?")
 NUMBER_WITH_COMMAS_PATTERN = re.compile(r'^-?\d{1,3}(,\d{3})+(\.\d+)?$')
 
-# Boolean value patterns (case-insensitive)
+# Boolean values we recognize (case-insensitive via .lower() before matching)
 BOOLEAN_TRUE_VALUES = {'true', '1', 'yes', 'y', 't'}
 BOOLEAN_FALSE_VALUES = {'false', '0', 'no', 'n', 'f'}
 BOOLEAN_ALL_VALUES = BOOLEAN_TRUE_VALUES | BOOLEAN_FALSE_VALUES
@@ -43,6 +67,8 @@ BOOLEAN_ALL_VALUES = BOOLEAN_TRUE_VALUES | BOOLEAN_FALSE_VALUES
 # ============================================
 # Individual Issue Detection Functions
 # ============================================
+# Each function below detects ONE type of issue. They return dicts that
+# can be aggregated into the final ScanReport.
 
 def detect_missing_values(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     """

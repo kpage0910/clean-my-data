@@ -1,34 +1,51 @@
-"""Suggestion Engine for Safe, Non-Destructive Data Cleaning
+"""
+Suggestion Engine - Safe, User-Controlled Data Cleaning
 
-FUNDAMENTAL PRINCIPLES (NEVER BREAK THESE):
+This module powers the "Safe Review" workflow where users approve each fix
+before it's applied. Unlike the autonomous engine, nothing changes without
+explicit user consent.
+
+WORKFLOW OVERVIEW:
+──────────────────
+Step 1: apply_safe_transformations()
+        → Apply UNIVERSALLY SAFE changes automatically (whitespace, casing)
+        
+Step 2: detect_issues()
+        → Identify remaining problems that need user decisions
+        
+Step 3: generate_suggestions()
+        → Create suggested fixes with "before/after" previews
+        
+Step 4: apply_approved_actions()
+        → Apply ONLY the fixes the user explicitly approved
+
+WHAT'S "UNIVERSALLY SAFE"? (applied automatically)
+──────────────────────────────────────────────────
+These transformations are always meaning-preserving:
+• Trim whitespace from all strings
+• Normalize casing (Title Case for names, lowercase for emails)
+• Convert number words to digits ("thirty" → 30)
+• Standardize dates to ISO format (YYYY-MM-DD)
+• Replace missing indicators ("na", "N/A", "-") with null
+• Remove exact duplicate rows
+
+WHAT REQUIRES USER APPROVAL?
+────────────────────────────
+These could potentially change meaning, so we ask first:
+• Dropping rows (even empty ones)
+• Filling missing values with placeholders
+• Replacing invalid format values
+• Any change the user might disagree with
+
+FUNDAMENTAL PRINCIPLES:
+───────────────────────
 1. NEVER invent, guess, or fabricate data
 2. ONLY apply deterministic, meaning-preserving transformations
-3. Automatically apply UNIVERSALLY SAFE operations (whitespace, casing, etc.)
-4. NEVER apply HIGH-RISK changes without user approval
-5. Missing/invalid cells remain blank unless user selects a placeholder
-6. Imputation (filling missing values) is strictly opt-in and OFF by default
-7. Dropping rows is strictly opt-in and OFF by default
-
-UNIVERSALLY SAFE (automatic):
-- Trim whitespace
-- Normalize casing (Title Case for names, lowercase for emails)
-- Convert number words to digits
-- Normalize dates to ISO format
-- Replace missing indicators (na, N/A, -, etc.) with null
-- Standardize boolean values
-- Deduplicate rows
-
-REQUIRES USER APPROVAL:
-- Drop rows
-- Fill missing values
-- Replace invalid formats
-- Any change that could alter meaning
-
-Workflow:
-    Step 1: apply_safe_transformations() - Apply universally safe changes automatically
-    Step 2: detect_issues() - Identify remaining issues
-    Step 3: generate_suggestions() - Create suggested fixes for user review
-    Step 4: apply_approved_actions() - Apply ONLY user-approved fixes
+3. Apply safe operations automatically to reduce noise
+4. ALWAYS ask before high-risk changes
+5. Missing/invalid cells stay blank unless user chooses otherwise
+6. Imputation (filling missing values) is OFF by default
+7. Row dropping is OFF by default
 """
 
 import re
@@ -65,6 +82,7 @@ from app.services.cleaner import (
 # ============================================
 # Universally Safe Transformations (Automatic)
 # ============================================
+# These run without user approval because they're obviously correct.
 
 def apply_safe_transformations(
     df: pd.DataFrame,
@@ -73,25 +91,21 @@ def apply_safe_transformations(
     """
     Apply universally safe transformations automatically.
     
-    These transformations are deterministic, meaning-preserving, and
-    do NOT require user approval:
+    These transformations are deterministic and meaning-preserving.
+    They reduce noise in the data without requiring user decisions.
     
-    - Trim whitespace from all string columns
-    - Normalize missing indicators (na, N/A, -, etc.) to null
-    - Normalize casing based on column type:
-      - Names → Title Case
-      - Emails → lowercase
-    - Convert number words to digits (thirty → 30)
-    - Normalize dates to ISO format (YYYY-MM-DD)
-    - Standardize boolean values (yes/no → true/false)
-    - Remove duplicate rows
+    What gets applied:
+    1. Normalize missing indicators ("na", "N/A", "-", etc.) → null
+    2. Trim whitespace from all string columns
+    3. Normalize casing based on column type:
+       - Names → Title Case ("JOHN DOE" → "John Doe")
+       - Emails → lowercase ("John@Email.COM" → "john@email.com")
+    4. Convert number words ("thirty" → 30)
+    5. Standardize dates to ISO format
+    6. Remove exact duplicate rows
     
-    Args:
-        df: The DataFrame to clean
-        strict_config: Strict mode configuration
-        
     Returns:
-        Tuple of (cleaned_df, summary_of_changes)
+        (cleaned_df, summary) - the cleaned data and a log of what changed
     """
     if strict_config is None:
         strict_config = DEFAULT_STRICT_CONFIG

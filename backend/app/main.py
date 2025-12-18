@@ -1,6 +1,30 @@
 """
 Clean My Data - FastAPI Backend
-Main application entry point with all route definitions.
+
+This is the main application entry point. It defines all HTTP API routes that
+the frontend (or any client) uses to upload, scan, preview, and clean CSV data.
+
+ARCHITECTURE OVERVIEW:
+─────────────────────
+1. User uploads a CSV file → stored temporarily with a unique file_id
+2. User requests a scan → backend analyzes data quality issues (no changes made)
+3. User previews changes → see "before vs after" without committing
+4. User applies changes → cleaned file saved with new file_id, available for download
+
+TWO CLEANING MODES:
+───────────────────
+• Quick Apply (/autonomous-preview, /autonomous-apply):
+  Automatic rule-based cleaning (capitalization, whitespace, number words, etc.)
+  Good for: Fast cleanup of common issues
+
+• Safe Review (/detect-issues, /apply-approved):
+  User reviews and approves each suggested fix before applying
+  Good for: Maximum control, sensitive data
+
+FILE STORAGE:
+─────────────
+Files are stored in a temp directory and tracked in-memory via FILE_STORAGE dict.
+This is intentionally simple—files are ephemeral and can be deleted at any time.
 """
 
 import os
@@ -11,7 +35,8 @@ from typing import Dict
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables BEFORE importing other modules
+# (some services like ai_summary.py read API keys from env)
 load_dotenv()
 
 import pandas as pd
@@ -76,13 +101,22 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# Simple in-memory file storage mapping file_id -> file_path
+# ============================================
+# In-Memory File Storage
+# ============================================
+# Maps file_id (UUID string) → absolute file path on disk.
+# This is intentionally simple: no database, no persistence across restarts.
+# For production, consider S3 or database-backed storage.
 FILE_STORAGE: Dict[str, str] = {}
 
-# Temporary directory for storing uploaded files
+# Temporary directory for uploaded files
 TEMP_DIR = Path(tempfile.gettempdir()) / "clean_my_data"
 TEMP_DIR.mkdir(exist_ok=True)
 
+
+# ============================================
+# Helper Functions
+# ============================================
 
 def get_file_path(file_id: str) -> Path:
     """Get the file path for a given file_id, raising 404 if not found."""
@@ -97,7 +131,12 @@ def get_file_path(file_id: str) -> Path:
 
 
 def load_csv(file_id: str) -> pd.DataFrame:
-    """Load a CSV file by file_id and return as DataFrame."""
+    """
+    Load a CSV file by file_id and return as a pandas DataFrame.
+    
+    This is the standard way to retrieve uploaded data for processing.
+    Raises HTTPException 404 if file not found, 400 if CSV is malformed.
+    """
     file_path = get_file_path(file_id)
     try:
         return pd.read_csv(file_path)
@@ -105,9 +144,13 @@ def load_csv(file_id: str) -> pd.DataFrame:
         raise HTTPException(status_code=400, detail=f"Error reading CSV: {str(e)}")
 
 
+# ============================================
+# Core API Routes
+# ============================================
+
 @app.get("/")
 async def root():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 200 if the server is running."""
     return {"status": "ok", "message": "Clean My Data API is running"}
 
 
@@ -116,9 +159,19 @@ async def upload_file(file: UploadFile = File(...)):
     """
     Upload a CSV file for processing.
     
-    - Accepts CSV file upload
-    - Stores file temporarily
-    - Returns a unique file_id for subsequent operations
+    This is typically the first step in any cleaning workflow:
+    1. Client uploads CSV file
+    2. Server validates it's a readable CSV
+    3. Server returns a unique file_id for all subsequent operations
+    
+    Returns:
+        file_id: UUID to reference this file in other endpoints
+        filename: Original filename (for display purposes)
+        message: Success confirmation
+        
+    Raises:
+        400: File is not CSV, empty, or malformed
+        500: Server error during upload
     """
     # Validate file type
     if not file.filename.endswith(".csv"):
@@ -160,11 +213,17 @@ async def upload_file(file: UploadFile = File(...)):
 @app.post("/scan", response_model=ScanResponse)
 async def scan_file(request: ScanRequest):
     """
-    Scan a CSV file for data quality issues.
+    Scan a CSV file to detect data quality issues.
     
-    - Accepts file_id of previously uploaded file
-    - Runs scanning logic to detect data issues
-    - Returns JSON report of identified issues
+    This is a READ-ONLY operation—no data is modified. The scan identifies:
+    - Missing values (null, empty strings)
+    - Duplicate rows
+    - Mixed data types within columns
+    - Format inconsistencies (emails, dates, etc.)
+    - Whitespace issues
+    
+    The returned report helps users understand what cleaning may be needed
+    before they decide which fixes to apply.
     """
     df = load_csv(request.file_id)
     

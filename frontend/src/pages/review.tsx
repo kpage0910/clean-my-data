@@ -1,3 +1,26 @@
+/**
+ * Review Page - Safe Review Workflow
+ *
+ * This page lets users review and approve each suggested fix individually.
+ * Unlike the Quick Apply workflow, NOTHING changes without explicit approval.
+ *
+ * USER FLOW:
+ * 1. User arrives from home page with fileId in query
+ * 2. Page fetches detected issues and suggested fixes
+ * 3. User reviews each issue and selects an action:
+ *    - "Keep original" (leave as-is)
+ *    - "Apply fix" (accept the suggested change)
+ *    - "Make blank" (clear the cell)
+ *    - "Remove row" (for empty/corrupt rows only)
+ * 4. User clicks "Apply Selected" to commit approved changes
+ * 5. Cleaned file downloads automatically
+ *
+ * SAFETY GUARANTEES:
+ * - Default action is always "leave as-is" (conservative)
+ * - User sees exactly what will change before committing
+ * - Original file is never modified (new file created)
+ * - Can cancel at any point without side effects
+ */
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";

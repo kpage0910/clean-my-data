@@ -1,3 +1,22 @@
+/**
+ * Preview Page - Quick Apply Workflow
+ *
+ * Shows users what autonomous cleaning will do BEFORE applying changes.
+ * This is the "preview before commit" step for the fast workflow.
+ *
+ * USER FLOW:
+ * 1. User arrives from home page with fileId in query
+ * 2. Page fetches autonomous preview (before/after comparison)
+ * 3. User reviews the changes in a table
+ * 4. User clicks "Apply & Download" to commit changes
+ * 5. Cleaned file downloads automatically
+ *
+ * KEY DESIGN DECISIONS:
+ * - Preview is read-only (no changes made until user clicks Apply)
+ * - Shows only first N rows to keep the page responsive
+ * - Changes are highlighted so user can see what's different
+ * - Can always go back to home page without applying
+ */
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";

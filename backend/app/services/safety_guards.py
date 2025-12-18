@@ -1,17 +1,43 @@
 """
-Safety Guards for Data Cleaning Operations
+Safety Guards - Blocking Forbidden Data Operations
 
-FUNDAMENTAL PRINCIPLES (NEVER BREAK THESE):
-1. NEVER invent, guess, or fabricate data
-2. ONLY apply deterministic, meaning-preserving transformations
-3. NEVER automatically fix or change anything without user approval
-4. Keep all raw data intact until after user confirmation
-5. Missing/invalid cells remain blank unless user selects a placeholder
-6. Imputation is strictly opt-in and OFF by default
-7. Dropping rows is strictly opt-in and OFF by default
+This module is the "security checkpoint" for all cleaning operations.
+Before any transformation is applied, it passes through here to ensure
+we're not doing something we shouldn't.
 
-This module provides safety validation for all cleaning operations.
-It blocks forbidden actions and generates appropriate warnings.
+WHY THIS EXISTS:
+────────────────
+Users trust us with their data. We must never:
+- Invent data that wasn't there
+- Guess at missing values
+- Change the meaning of existing values
+
+This module enforces those rules programmatically, so even if a bug
+elsewhere tries to do something forbidden, it gets blocked here.
+
+FORBIDDEN ACTIONS (always blocked in strict mode):
+──────────────────────────────────────────────────
+• GUESS_NAME: Don't invent names for blank cells
+• GUESS_EMAIL: Don't generate fake email addresses
+• GUESS_AGE: Don't estimate someone's age
+• GUESS_CATEGORY: Don't assign categories we're unsure about
+• FILL_MISSING_ASSUMPTION: Don't fill blanks based on assumptions
+• INVENT_REPLACEMENT: Don't create replacement values
+• GENERATE_RANDOM: Don't use random data
+• CHANGE_MEANING: Don't alter what a value means
+• AUTO_DROP_ROW: Don't delete rows without explicit approval
+• IMPUTE_*: Don't fill with mean/median/mode without permission
+
+EXAMPLE:
+────────
+If someone's email is missing, we should NOT:
+  ✗ Guess it from their name ("john.doe@company.com")
+  ✗ Fill it with a placeholder like "no-email@unknown.com"
+  ✗ Copy it from another row
+
+We SHOULD:
+  ✓ Leave it blank
+  ✓ Let the user decide what to do
 """
 
 from enum import Enum
@@ -27,7 +53,12 @@ from app.models.schemas import (
 
 
 class ForbiddenAction(str, Enum):
-    """Actions that are NEVER allowed unless explicitly enabled."""
+    """
+    Actions that are NEVER allowed in strict mode.
+    
+    These represent the "bright lines" we don't cross.
+    Even if a user somehow requests these, we refuse.
+    """
     GUESS_NAME = "guess_name"
     GUESS_EMAIL = "guess_email"
     GUESS_AGE = "guess_age"

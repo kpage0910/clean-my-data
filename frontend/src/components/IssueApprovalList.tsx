@@ -1,3 +1,25 @@
+/**
+ * IssueApprovalList Component
+ *
+ * Displays a list of detected data quality issues and lets users choose
+ * how to fix each one. This is the core UI for the "Safe Review" workflow.
+ *
+ * STRUCTURE:
+ * - Cell Issues: Problems with individual cell values (missing, invalid format, etc.)
+ * - Row Issues: Problems with entire rows (empty, duplicate)
+ * - Column Issues: Column-wide problems (boolean format inconsistency)
+ *
+ * For each issue, the user can select an action from a dropdown:
+ * - "Keep original" → leave_as_is
+ * - "Apply fix" → apply_deterministic_fix
+ * - "Make blank" → replace_with_blank
+ * - "Use placeholder" → replace_with_placeholder
+ * - "Remove row" → drop_row (only for qualifying rows)
+ *
+ * The component tracks all user selections and calls onApprovalChange()
+ * whenever the selection changes, passing the list of approved actions
+ * to the parent component.
+ */
 import React, { useState, useEffect } from "react";
 import {
   CellIssueSuggestion,

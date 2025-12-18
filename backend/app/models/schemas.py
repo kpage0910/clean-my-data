@@ -1,5 +1,27 @@
 """
-Pydantic models for request/response schemas.
+Pydantic Models for API Request/Response Schemas
+
+This module defines the data structures used for communication between
+the frontend and backend. Every API endpoint uses these schemas for:
+- Request validation (ensures required fields are present)
+- Response formatting (ensures consistent JSON structure)
+- Documentation (auto-generates OpenAPI/Swagger docs)
+
+ORGANIZATION:
+─────────────
+1. StrictModeConfig - Controls what transformations are allowed
+2. Upload schemas - For /upload endpoint
+3. Scan schemas - For /scan endpoint
+4. Preview schemas - For /preview and /autonomous-preview
+5. Apply schemas - For /apply and /autonomous-apply
+6. Safe Review schemas - For /detect-issues and /apply-approved
+7. AI Summary schemas - For /ai-summary endpoint
+
+NAMING CONVENTION:
+──────────────────
+- *Request: Schema for incoming request body
+- *Response: Schema for outgoing response
+- *Info/*Report: Internal data structures returned within responses
 """
 
 from typing import Any, Dict, List, Optional
@@ -10,20 +32,19 @@ from pydantic import BaseModel, Field
 # ============================================
 # Strict Mode Configuration
 # ============================================
+# This is the "safety dial" that controls how aggressive the cleaner is.
+# Default is STRICT mode, which only allows obviously-safe transformations.
 
 class CleaningMode(str, Enum):
     """
-    Cleaning mode that controls transformation behavior.
+    High-level cleaning mode selection.
     
-    STRICT: Deterministic, meaning-preserving transformations only.
-            - No fabrication of data
-            - No imputation of missing values (unless explicitly enabled)
-            - Invalid/blank cells remain blank or become "Unknown"
-            - Only reversible, lossless transformations allowed
-            
-    LENIENT: Standard cleaning with heuristics and imputation.
-             - May fill missing values with inferred data
-             - May apply non-reversible transformations
+    STRICT (default): Only deterministic, meaning-preserving transformations.
+                      This is the safe choice for sensitive data.
+                      
+    LENIENT: More aggressive cleaning with heuristics and imputation.
+             May fill missing values, infer categories, etc.
+             Use only when you're confident the guesses will be correct.
     """
     STRICT = "strict"
     LENIENT = "lenient"
@@ -31,14 +52,13 @@ class CleaningMode(str, Enum):
 
 class StrictModeConfig(BaseModel):
     """
-    Configuration for strict (deterministic) data cleaning mode.
+    Fine-grained control over what strict mode allows.
     
-    When strict mode is enabled:
-    1. No fabrication or guessing of new data
-    2. Only meaning-preserving transformations allowed
-    3. No imputation unless explicitly enabled
-    4. Invalid/blank cells left as-is or marked "Unknown"
-    5. All transformations must be deterministic and reversible
+    By default, strict mode is enabled with all safe transformations allowed.
+    You can selectively enable risky operations like imputation if needed.
+    
+    Example - allow imputation:
+        StrictModeConfig(enabled=True, allow_imputation=True)
     """
     enabled: bool = Field(True, description="Whether strict mode is active")
     allow_imputation: bool = Field(

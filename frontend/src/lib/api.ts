@@ -1,8 +1,27 @@
 /**
- * API client for Clean My Data backend
+ * API Client for Clean My Data Backend
+ *
+ * This module provides typed functions for all backend API calls.
+ * It handles request formatting, error handling, and response parsing.
+ *
+ * USAGE PATTERN:
+ * All functions are async and throw on error. Wrap calls in try/catch.
+ *
+ * WORKFLOW OVERVIEW:
+ * 1. uploadFile() → Get a file_id
+ * 2. scanFile() → See what issues exist
+ * 3. Choose a cleaning approach:
+ *    - Quick Apply: autonomousPreview() → autonomousApply()
+ *    - Safe Review: detectIssues() → applyApprovedActions()
+ * 4. downloadFile() → Get the cleaned CSV
  */
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// ============================================
+// Type Definitions
+// ============================================
+// These match the backend's Pydantic schemas exactly.
 
 export interface UploadResponse {
   file_id: string;
@@ -52,8 +71,19 @@ export interface PreviewResponse {
   preview_rows: number;
 }
 
+// ============================================
+// Core API Functions
+// ============================================
+
 /**
- * Upload a CSV file to the backend
+ * Upload a CSV file to the backend for processing.
+ *
+ * This is the first step in any cleaning workflow. The returned file_id
+ * is used to reference this data in all subsequent operations.
+ *
+ * @param file - The CSV file to upload
+ * @returns Promise with file_id for referencing this file
+ * @throws Error if upload fails or file is invalid
  */
 export async function uploadFile(file: File): Promise<UploadResponse> {
   const formData = new FormData();
@@ -73,7 +103,13 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
 }
 
 /**
- * Scan an uploaded file for data issues
+ * Scan an uploaded file for data quality issues.
+ *
+ * This is a READ-ONLY operation - no data is modified.
+ * Use this to show users what problems exist before cleaning.
+ *
+ * @param fileId - The file_id from uploadFile()
+ * @returns Promise with scan report containing detected issues
  */
 export async function scanFile(fileId: string): Promise<ScanResponse> {
   const response = await fetch(`${API_BASE_URL}/scan`, {
@@ -92,8 +128,21 @@ export async function scanFile(fileId: string): Promise<ScanResponse> {
   return response.json();
 }
 
+// ============================================
+// Quick Apply Workflow (Autonomous Cleaning)
+// ============================================
+// These functions power the "Quick Apply" mode where the system
+// automatically applies safe transformations without per-cell approval.
+
 /**
- * Preview autonomous cleaning changes (smart cleaning with type inference)
+ * Preview what autonomous cleaning would do (without applying changes).
+ *
+ * Use this to show users a "before vs after" comparison before committing.
+ * The preview shows how values would change for the first N rows.
+ *
+ * @param fileId - The file_id to preview
+ * @param nRows - Number of rows to include in preview (default: 100)
+ * @returns Promise with preview rows showing original vs cleaned values
  */
 export async function autonomousPreview(
   fileId: string,
@@ -119,7 +168,13 @@ export async function autonomousPreview(
 }
 
 /**
- * Apply autonomous cleaning (smart cleaning with type inference)
+ * Apply autonomous cleaning and get a new cleaned file.
+ *
+ * This commits the changes previewed in autonomousPreview().
+ * The original file is preserved; a new file_id is returned for the cleaned version.
+ *
+ * @param fileId - The file_id to clean
+ * @returns Promise with the cleaned_file_id for downloading
  */
 export async function autonomousApply(fileId: string): Promise<ApplyResponse> {
   const response = await fetch(`${API_BASE_URL}/autonomous-apply`, {
@@ -147,8 +202,15 @@ export interface ApplyResponse {
   rows_processed: number;
 }
 
+// ============================================
+// Manual Rules Workflow (Legacy)
+// ============================================
+// These functions allow applying specific cleaning rules manually.
+// Mostly used for advanced users who want fine-grained control.
+
 /**
- * Preview cleaning changes (legacy - with manual rules)
+ * Preview what specific cleaning rules would do.
+ * @deprecated Prefer autonomousPreview() for most use cases
  */
 export async function previewClean(
   fileId: string,
@@ -176,7 +238,8 @@ export async function previewClean(
 }
 
 /**
- * Apply cleaning rules to a file and get the cleaned file ID
+ * Apply specific cleaning rules and get a new cleaned file.
+ * @deprecated Prefer autonomousApply() for most use cases
  */
 export async function applyClean(
   fileId: string,
@@ -201,8 +264,18 @@ export async function applyClean(
   return response.json();
 }
 
+// ============================================
+// File Download
+// ============================================
+
 /**
- * Download a cleaned CSV file
+ * Download a cleaned CSV file by triggering a browser download.
+ *
+ * This creates a temporary link element and clicks it to start the download.
+ * Works in all modern browsers.
+ *
+ * @param fileId - The file_id to download
+ * @param filename - Optional custom filename (default: cleaned_{fileId}.csv)
  */
 export function downloadFile(fileId: string, filename?: string): void {
   const downloadUrl = `${API_BASE_URL}/download/${fileId}`;
@@ -309,12 +382,19 @@ export async function autonomousClean(
 }
 
 // ============================================
-// SAFE DATA CLEANING WORKFLOW (User Approval Required)
+// Safe Review Workflow Types & Functions
 // ============================================
+// These power the "Safe Review" mode where users approve each change.
 
 /**
- * Available actions for fixing issues
- * CONSERVATIVE BY DEFAULT - leave_as_is is the safest option
+ * Available actions for fixing issues.
+ *
+ * CONSERVATIVE BY DEFAULT:
+ * - "leave_as_is": Keep the original value (safest)
+ * - "replace_with_blank": Clear the cell
+ * - "replace_with_placeholder": Use a placeholder like "Unknown"
+ * - "apply_deterministic_fix": Apply a reversible, meaning-preserving fix
+ * - "drop_row": Remove the row entirely (only for empty/corrupt rows)
  */
 export type SuggestedAction =
   | "leave_as_is"

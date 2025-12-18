@@ -1,3 +1,24 @@
+/**
+ * Home Page - Main Entry Point
+ *
+ * This is the landing page where users start their data cleaning journey.
+ *
+ * USER FLOW:
+ * 1. User lands on marketing page with "Get Started" CTA
+ * 2. User clicks to reveal upload form
+ * 3. User uploads CSV file
+ * 4. File is scanned for issues automatically
+ * 5. User sees issue summary and chooses:
+ *    - "Quick Apply" → /preview (autonomous cleaning)
+ *    - "Safe Review" → /review (approve each fix)
+ *
+ * STATE MANAGEMENT:
+ * - fileId: UUID from backend after upload
+ * - scanReport: Issue detection results
+ * - showUpload: Controls whether upload form is visible
+ *
+ * The page also handles returning from /review or /preview via URL query params.
+ */
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import UploadForm from "@/components/UploadForm";
