@@ -1,0 +1,29 @@
+import databases
+import sqlalchemy
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get database URL from environment variable
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is not set")
+
+database = databases.Database(DATABASE_URL)
+metadata = sqlalchemy.MetaData()
+
+users = sqlalchemy.Table(
+    "users",
+    metadata,
+    sqlalchemy.Column("id", sqlalchemy.Integer, primary_key=True),
+    sqlalchemy.Column("google_id", sqlalchemy.String, unique=True, index=True),
+    sqlalchemy.Column("email", sqlalchemy.String, unique=True, index=True),
+    sqlalchemy.Column("cleanings_this_month", sqlalchemy.Integer, default=0),
+    sqlalchemy.Column("last_reset", sqlalchemy.DateTime),
+)
+
+engine = sqlalchemy.create_engine(DATABASE_URL)
+metadata.create_all(engine)
