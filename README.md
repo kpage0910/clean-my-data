@@ -48,7 +48,13 @@ Every transformation is visible. Nothing changes without your approval.
 
 ## Demo
 
-https://github.com/user-attachments/assets/clean-my-data-mvp2.mp4
+[Watch the demo video](./clean-my-data-mvp2.mp4)
+
+<!-- Once uploaded to GitHub, you can embed the video directly:
+
+https://github.com/kpage0910/clean-my-data/assets/YOUR_USER_ID/clean-my-data-mvp2.mp4
+
+-->
 
 | Upload                 | Scan                          | Preview                           |
 | ---------------------- | ----------------------------- | --------------------------------- |
