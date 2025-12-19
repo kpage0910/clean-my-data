@@ -48,7 +48,7 @@ Every transformation is visible. Nothing changes without your approval.
 
 ## Demo
 
-<!-- Add screenshots or a GIF walkthrough here -->
+https://github.com/user-attachments/assets/clean-my-data-mvp2.mp4
 
 | Upload                 | Scan                          | Preview                           |
 | ---------------------- | ----------------------------- | --------------------------------- |
