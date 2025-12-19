@@ -46,14 +46,6 @@ Every transformation is visible. Nothing changes without your approval.
 
 ---
 
-## Demo
-
-| Upload                 | Scan                          | Preview                           |
-| ---------------------- | ----------------------------- | --------------------------------- |
-| Drag and drop your CSV | See detected issues by column | Compare original vs. cleaned data |
-
----
-
 ## How It Works
 
 ```
